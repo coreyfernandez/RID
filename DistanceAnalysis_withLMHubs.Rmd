@@ -1,0 +1,1060 @@
+---
+title: "Distance_Analysis_withSharedLM"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    code_folding: hide
+    toc: yes
+  html_document:
+    code_folding: hide
+    highlight: pygments
+    theme: flatly
+    toc: yes
+---
+# This notebook conducts analyses for Representational integration and differentiation in the human hippocampus following goal directed navigation by Fernandez et al., 2023
+#This notebook conducts the link distance analysis, without excluding hubs (requested by reviewer)
+
+Load Packages 
+```{r load necessary packages and dataframe, warning=FALSE, message =FALSE}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(stringr)
+library(lattice)
+library(emmeans)
+library(languageR)
+library(performance)
+library(effects)
+library(Rmisc)
+library(reshape)
+library(tidyr)
+library(ez)
+library(car)
+library(sjPlot)
+```
+
+# Load and clean data
+```{r}
+# load the data
+df1 = read.csv('~/Dropbox/Project/analysis/mixedmodels/psa_longform_allSubs_vmpfc.csv',header = T)   # if on laptop
+df2 = read.csv('~/Dropbox/Project/analysis/mixedmodels/psa_longform_allSubs_june2021.csv',header = T) # remove random column
+df3 = read.csv('~/Dropbox/Project/analysis/mixedmodels/psa_longform_allSubs_controls.csv',header = T)
+df2$X <- NULL
+
+df = rbind(df1,df2,df3) # combine dfs
+
+# data for brain/behav analysis requested by reviewer
+df_trialwise = read.csv('~/Dropbox/Project/analysis/mixedmodels/HPC_PAPER/Finals_github/trialwiseModel.csv',header = T) 
+
+# exclude data previously determined 
+df <- df %>%
+  filter(!(subNum == "17" & sesNum == "3"))
+
+# figure color schemes
+colors123 <- c('#76dfca', '#44999e', '#005a74')
+colors12 <- c('#76dfca', '#44999e')
+colors23 <- c('#44999e', '#005a74')
+colors13 <- c('#76dfca','#005a74')
+colorsbehav <- c('#a21a45', '#93003a') # '#d08c88', '#f4777f' '#f1aaa6'
+
+# lists and names of things we will use later
+vmpfc <- "vmPFC"
+hpc_left = "Left hippocampus"
+hpc_right = "Right Hippocampus"
+hpc_all = "Bilateral Hippocampus"
+hpcROIs <- c("HPC_left", "HPC_right")
+ercROIs <- c("ERC_left", "ERC_right")
+
+btwdists <- c("2 (within-context)","2 (across-contexts)")
+wcdists <- c("1 (within-context)", "2 (within-context)")
+acdists <- c("2 (across-contexts)", "3 (across-contexts)", "4 (across-contexts)")
+```
+
+Create new columns for comparisons of interest
+```{r}
+# get rid of this stupid space that is somehow in the csvs 
+df$stim1_context[df$stim1_context=="hub "]="hub"
+df$stim1_context=droplevels(df$stim1_context)
+
+# clean up and factor subNum, sesNum
+df$subNum <- sapply(df$subNum, function(x) sprintf('%.2d',x))
+df$subNum <- factor(df$subNum)
+
+# Add new column for stimtype comparison, factor the result
+df$stimtype_comparison <- NA
+df$stimtype_comparison[df$stim1_type == df$stim2_type] <- "within-stimulus category"
+df$stimtype_comparison[df$stim1_type != df$stim2_type] <- "across-stimulus category"
+df$stimtype_comparison[df$stim1_ID == df$stim2_ID] <- "self"
+df$stimtype_comparison <- factor(df$stimtype_comparison, levels = c("self","within-stimulus category","across-stimulus category"))
+
+# # Add new column for context comparison, factor the result
+df$context_comparison <- NA
+df$context_comparison[df$stim1_context == df$stim2_context] <- "within-context"
+df$context_comparison[df$stim1_context != df$stim2_context] <- "across-contexts"
+df$context_comparison[df$stim1_ID == df$stim2_ID] <- "self"
+df$context_comparison <- factor(df$context_comparison, levels = c("self","within-context","across-contexts"))
+
+# Add new column for distance comparisons, factor the result
+lm4 <- c("6","9","10","11")
+lm6 <- c("1","4","10","12")
+lm10 <- c("2","4","6","8")
+hubs <- c("3","5","7")
+df$distance_comparison <- NA
+df$distance_comparison[(df$stim1_context == df$stim2_context) & (df$distance == "1")] <- "1 (within-context)"
+df$distance_comparison[(df$stim1_context == df$stim2_context) & (df$distance == "2")] <- "2 (within-context)"
+# df$distance_comparison[(df$stim1_context == df$stim2_context) & (df$distance == "1") & (df$stim1_hubtype != "hub")&(df$stim2_hubtype != "hub")] <- "1 (within-context)"  # FOR SUPPLEMENT
+# df$distance_comparison[(df$stim1_context == df$stim2_context) & (df$distance == "2") & (df$stim1_hubtype != "hub")&(df$stim2_hubtype != "hub")] <- "2 (within-context)"  # FOR SUPPLEMENT
+df$distance_comparison[(df$stim1_ID == "4") & (df$stim2_ID %in% lm4)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim2_ID == "4") & (df$stim1_ID %in% lm4)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim1_ID == "6") & (df$stim2_ID %in% lm6)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim2_ID == "6") & (df$stim1_ID %in% lm6)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim1_ID == "10") & (df$stim2_ID %in% lm10)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim2_ID == "10") & (df$stim1_ID %in% lm10)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim1_context != df$stim2_context) & (df$distance == "3.5")] <- "3 (across-contexts)"
+df$distance_comparison[(df$stim1_context != df$stim2_context) & (df$distance == "4")] <- "4 (across-contexts)"
+df$distance_comparison[(df$stim1_context != df$stim2_context) & (df$distance == "4.5")] <- "4 (across-contexts)"
+df$distance_comparison <- factor(df$distance_comparison, levels = c("1 (within-context)", "2 (within-context)", "2 (across-contexts)", "3 (across-contexts)", "4 (across-contexts)"))
+
+# Add new column for within-context distance comparison, factor the result
+df$wcdistance <- NA
+df$wcdistance[df$distance_comparison == "1 (within-context)"] <- "1"
+df$wcdistance[df$distance_comparison == "2 (within-context)"] <- "2"
+df$wcdistance <- factor(df$wcdistance)
+
+# Add new column for across-contexts distance comparison, factor the result
+df$acdistance <- NA
+df$acdistance[df$distance_comparison == "2 (across-contexts)"] <- "2"
+df$acdistance[df$distance_comparison == "3 (across-contexts)"] <- "3"
+df$acdistance[df$distance_comparison == "4 (across-contexts)"] <- "4"
+df$acdistance <- factor(df$acdistance)
+
+# Add new column for renaming sesNum, factor the result
+df$phase <- NA
+df$phase[df$sesNum == "1"] <- "Pre-Learning"
+df$phase[df$sesNum == "2"] <- "Post Local Navigation"
+df$phase[df$sesNum == "3"] <- "Post Global Navigation"
+df$phase <- factor(df$phase, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+```
+
+Subset data for distance models
+```{r}
+# Expand to all distances (within and across context), Still get rid of diagonal and only include within stimulus category comparisons
+distance.ac.123 <- df %>%
+  filter((stimtype_comparison != "self"),(stimtype_comparison == "within-stimulus category"))
+
+# refactor everything
+distance.ac.123$stimtype_comparison <- factor(distance.ac.123$stimtype_comparison, levels = c("within-stimulus category","across-stimulus category"))
+distance.ac.123$context_comparison <- factor(distance.ac.123$context_comparison, levels = c("within-context","across-contexts"))
+distance.ac.123$subNum <- factor(distance.ac.123$subNum)
+distance.ac.123$sesNum <- factor(distance.ac.123$sesNum)
+
+### Set contrasts appropriately ###
+# make a copy of the data
+distance.ac.123.copy <- data.frame(distance.ac.123)
+
+# sum coding for stimtype_comparison, context comparison, stim type, hub comparison, posCat comparison
+contrasts(distance.ac.123.copy$stim1_type) <- c(-0.5,0.5)
+colnames(attr(distance.ac.123.copy$stim1_type,"contrasts")) = "LM>FR"
+contrasts(distance.ac.123.copy$stim2_type) <- c(-0.5,0.5)
+colnames(attr(distance.ac.123.copy$stim2_type,"contrasts")) = "LM>FR"
+contrasts(distance.ac.123.copy$stimtype_comparison) <- c(0.5,-0.5)
+colnames(attr(distance.ac.123.copy$stimtype_comparison,"contrasts")) = "within>across"
+contrasts(distance.ac.123.copy$context_comparison) <- c(0.5,-0.5)
+colnames(attr(distance.ac.123.copy$context_comparison,"contrasts")) = "within>across"
+```
+
+## Hippocampus
+#### Test for hemispheric differences
+within-track stim only
+```{r}
+distance.wc.123.hpc_all.LM <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs,stim1_type == "LM", distance_comparison!="NA", wcdistance != "NA")
+contrasts(distance.wc.123.hpc_all.LM$wcdistance) <- c(-0.5,0.5)
+colnames(attr(distance.wc.123.hpc_all.LM$wcdistance,"contrasts")) = "LD2>LD1"
+
+model.distance.wc.123.hpc_all <- lmer(fisher_r ~ sesNum*wcdistance*roi + stim1_avgAct + stim2_avgAct
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = distance.wc.123.hpc_all.LM,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.distance.wc.123.hpc_all)
+```
+
+```{r}
+tab_model(model.distance.wc.123.hpc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+across-track stim only
+```{r}
+distance.ac.123.hpc_all.LM <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs,stim1_type == "LM", distance_comparison!="NA", acdistance != "NA") 
+distance.ac.123.hpc_all.LM$acdistance <- as.numeric(distance.ac.123.hpc_all.LM$acdistance)
+
+model.distance.ac.123.hpc_all <- lmer(fisher_r ~ sesNum*acdistance*roi + stim1_avgAct + stim2_avgAct
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = distance.ac.123.hpc_all.LM,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.distance.ac.123.hpc_all)
+```
+
+```{r}
+tab_model(model.distance.ac.123.hpc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+### Bilateral hippocampus
+
+#### Landmarks, within and across tracks
+Plot mean pattern similarity for landmarks across all three sessions for all distance categories
+```{r, fig.width=5, fig.height=2.5}
+distance.ac.123.hpc_all.LM <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs, stim1_type == "LM",distance_comparison!="NA")
+
+# within context distances
+wc123.test <- distance.ac.123.hpc_all.LM %>%
+  filter(distance_comparison %in% wcdists)
+
+summary.wc123.test.r <- summarySEwithin(data = wc123.test, measurevar = "fisher_r", withinvars = c("phase","stim1_type", "wcdistance"),idvar = 'subNum')
+summary.wc123.test.r.sub <- summarySEwithin(data = wc123.test, measurevar = "fisher_r", withinvars = c("subNum","phase","stim1_type", "wcdistance"))
+
+# across context all scans 
+ac123.test <- distance.ac.123.hpc_all.LM %>%
+  filter(distance_comparison %in% acdists)
+
+summary.ac123.test.r <- summarySEwithin(data = ac123.test, measurevar = "fisher_r", withinvars = c("phase","stim1_type", "acdistance"),idvar = 'subNum')
+summary.ac123.test.r.sub <- summarySEwithin(data = ac123.test, measurevar = "fisher_r", withinvars = c("subNum","phase","stim1_type", "acdistance"))
+```
+
+```{r,fig.width=5, fig.height=2}
+withindist_hpc_r <- ggplot() + 
+  #geom_point(data=summary.wc123.test.r.sub, aes(y=fisher_r,x=wcdistance,group=phase), alpha = .5, size = .5, position = position_dodge(0.05)) +
+  geom_errorbar(data=summary.wc123.test.r, aes(y=fisher_r, x=wcdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.wc123.test.r, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.wc123.test.r, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf(hpc_all)) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+withindist_hpc_r
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/HPC_within_distance.png', withindist_hpc_r, dpi=600)
+
+acrossdist_hpc_r <- ggplot() + 
+  #geom_point(data=summary.ac123.test.r.sub, aes(y=fisher_r,x=acdistance,group=phase), alpha = .5, size = .5, position = position_dodge(0.05)) +
+  geom_errorbar(data=summary.ac123.test.r, aes(y=fisher_r, x=acdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.ac123.test.r, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.ac123.test.r, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf(hpc_all)) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+acrossdist_hpc_r
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/HPC_across_distance.png', acrossdist_hpc_r, dpi=600)
+```
+
+### Interaction with performance metric
+Median path efficiency at start of day 2 Global Nav task 
+```{r}
+ac.distances.2.hpc_all <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs, stim1_type == "LM",distance_comparison %in% acdists,sesNum == "2")
+ac.distances.2.hpc_all$subNum <- factor(ac.distances.2.hpc_all$subNum)
+
+# add a path inefficiency metric to look at this in a continuous manner 
+# (note to self: learn r)
+ac.distances.2.hpc_all <- ac.distances.2.hpc_all %>%
+  mutate(d2_startruns_meanefficiency = ifelse(subNum == "02",82.986,ifelse(subNum == "03",12.747,ifelse(subNum == "05",68.736,ifelse(subNum == "06",26.819,
+                                       ifelse(subNum == "08",24.125,ifelse(subNum == "09",32.540,ifelse(subNum == "10",40.703,ifelse(subNum == "12",9.414,
+                                       ifelse(subNum == "13",134.297,ifelse(subNum == "16",40.677,ifelse(subNum == "18",5.652,ifelse(subNum == "19",31.473,
+                                       ifelse(subNum == "20",17.521,ifelse(subNum == "21",19.862,ifelse(subNum == "22",14.135,ifelse(subNum == "25",78.217,
+                                       ifelse(subNum == "28",8.289,ifelse(subNum == "29", 62.499,ifelse(subNum == "31", 82.715, ifelse(subNum == "32", 14.708,
+                                       ifelse(subNum == "33",101.120,"ignore")))))))))))))))))))))) %>%
+  filter(d2_startruns_meanefficiency!="ignore")
+
+ac.distances.2.hpc_all <- ac.distances.2.hpc_all %>%
+  mutate(d2_startruns_medefficiency = ifelse(subNum == "02", 43.807,ifelse(subNum == "03", 8.866,ifelse(subNum == "05", 72.640,ifelse(subNum == "06", 15.123,
+                                      ifelse(subNum == "08", 15.205,ifelse(subNum == "09", 10.599,ifelse(subNum == "10", 25.187,ifelse(subNum == "12", 4.720,
+                                      ifelse(subNum == "13", 91.166,ifelse(subNum == "16", 27.476,ifelse(subNum == "18", 4.173,ifelse(subNum == "19", 16.707,
+                                      ifelse(subNum == "20", 7.674,ifelse(subNum == "21", 7.693,ifelse(subNum == "22", 3.153,ifelse(subNum == "25", 29.181,
+                                      ifelse(subNum == "28", 0.427,ifelse(subNum == "29", 50.230,ifelse(subNum == "31", 73.830, ifelse(subNum == "32", 10.177, 
+                                      ifelse(subNum == "33", 90.895,"ignore")))))))))))))))))))))) %>%
+  filter(d2_startruns_medefficiency!="ignore")
+
+ac.distances.2.hpc_all$d2_startruns_meanefficiency <- as.numeric(ac.distances.2.hpc_all$d2_startruns_meanefficiency) 
+ac.distances.2.hpc_all$d2_startruns_medefficiency <- as.numeric(ac.distances.2.hpc_all$d2_startruns_medefficiency) 
+
+model.ac.distances.2.hpc_all.cont_med <- lmer(fisher_r ~ distance*d2_startruns_medefficiency + (1 | subNum),
+                                     data = ac.distances.2.hpc_all,
+                                     control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.2.hpc_all.cont_med)
+```
+
+```{r}
+tab_model(model.ac.distances.2.hpc_all.cont_med, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+```{r}
+-1.983/sqrt(21)
+```
+
+Day 3-
+```{r}
+ac.distances.3.hpc_all <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs, stim1_type == "LM",distance_comparison %in% acdists,sesNum == "3")
+ac.distances.3.hpc_all$subNum <- factor(ac.distances.3.hpc_all$subNum)
+
+# add a path inefficiency metric to look at this in a continuous manner 
+# (note to self: learn r)
+ac.distances.3.hpc_all <- ac.distances.3.hpc_all %>%
+  mutate(d2_startruns_medefficiency = ifelse(subNum == "02", 43.807,ifelse(subNum == "03", 8.866,ifelse(subNum == "05", 72.640,ifelse(subNum == "06", 15.123,
+                                      ifelse(subNum == "08", 15.205,ifelse(subNum == "09", 10.599,ifelse(subNum == "10", 25.187,ifelse(subNum == "12", 4.720,
+                                      ifelse(subNum == "13", 91.166,ifelse(subNum == "16", 27.476,ifelse(subNum == "18", 4.173,ifelse(subNum == "19", 16.707,
+                                      ifelse(subNum == "20", 7.674,ifelse(subNum == "21", 7.693,ifelse(subNum == "22", 3.153,ifelse(subNum == "25", 29.181,
+                                      ifelse(subNum == "28", 0.427,ifelse(subNum == "29", 50.230,ifelse(subNum == "31", 73.830, ifelse(subNum == "32", 10.177, 
+                                      ifelse(subNum == "33", 90.895,"ignore")))))))))))))))))))))) %>%
+  filter(d2_startruns_medefficiency!="ignore")
+
+ac.distances.3.hpc_all$d2_startruns_medefficiency <- as.numeric(ac.distances.3.hpc_all$d2_startruns_medefficiency) 
+
+model.ac.distances.3.hpc_all.cont_med <- lmer(fisher_r ~ distance*d2_startruns_medefficiency 
+                                     + (1 | subNum),
+                                     data = ac.distances.3.hpc_all,
+                                     control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.3.hpc_all.cont_med)
+```
+
+```{r}
+tab_model(model.ac.distances.3.hpc_all.cont_med, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+Day 1
+```{r}
+ac.distances.1.hpc_all <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs, stim1_type == "LM",distance_comparison %in% acdists,sesNum == "1")
+ac.distances.1.hpc_all$subNum <- factor(ac.distances.1.hpc_all$subNum)
+
+# add a path inefficiency metric to look at this in a continuous manner 
+# (note to self: learn r)
+ac.distances.1.hpc_all <- ac.distances.1.hpc_all %>%
+  mutate(d2_startruns_medefficiency = ifelse(subNum == "02", 43.807,ifelse(subNum == "03", 8.866,ifelse(subNum == "05", 72.640,ifelse(subNum == "06", 15.123,
+                                      ifelse(subNum == "08", 15.205,ifelse(subNum == "09", 10.599,ifelse(subNum == "10", 25.187,ifelse(subNum == "12", 4.720,
+                                      ifelse(subNum == "13", 91.166,ifelse(subNum == "16", 27.476,ifelse(subNum == "18", 4.173,ifelse(subNum == "19", 16.707,
+                                      ifelse(subNum == "20", 7.674,ifelse(subNum == "21", 7.693,ifelse(subNum == "22", 3.153,ifelse(subNum == "25", 29.181,
+                                      ifelse(subNum == "28", 0.427,ifelse(subNum == "29", 50.230,ifelse(subNum == "31", 73.830, ifelse(subNum == "32", 10.177, 
+                                      ifelse(subNum == "33", 90.895,"ignore")))))))))))))))))))))) %>%
+  filter(d2_startruns_medefficiency!="ignore")
+
+ac.distances.1.hpc_all$d2_startruns_medefficiency <- as.numeric(ac.distances.1.hpc_all$d2_startruns_medefficiency) 
+
+model.ac.distances.1.hpc_all.cont_med <- lmer(fisher_r ~ distance*d2_startruns_medefficiency
+                                     + (1 | subNum),
+                                     data = ac.distances.1.hpc_all,
+                                     control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.1.hpc_all.cont_med)
+```
+
+```{r}
+tab_model(model.ac.distances.1.hpc_all.cont_med, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+
+##### Split HPC into different groups to model
+First, look within track
+```{r, fig.width=3, fig.height=2.5}
+contrasts(wc123.test$wcdistance) <- c(-0.5,0.5)
+colnames(attr(wc123.test$wcdistance,"contrasts")) = "LD2>LD1"
+
+
+model.wc.distances.123.hpc_all <- lmer(fisher_r ~ sesNum*wcdistance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = wc123.test,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.wc.distances.123.hpc_all)
+contrasts.wc.distances.123.hpc_all <- emmeans(model.wc.distances.123.hpc_all, specs = pairwise~sesNum:wcdistance)
+contrasts.wc.distances.123.hpc_all
+```
+Effect size
+```{r}
+2.7/sqrt(23)
+2.259/sqrt(21)
+```
+
+```{r}
+tab_model(model.wc.distances.123.hpc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.wc.distances.123.hpc_all$contrasts) %>%
+  filter(contrast == "1 1 - 1 2" | contrast == "2 1 - 2 2" | contrast == "3 1 - 3 2")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ggtitle(label = 'Contrast Estimates', subtitle = sprintf(hpc_all)) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=12),
+        legend.position = "none") +  
+  ylab("Link Distance 1 - Link Distance 2 Similarity") +
+  xlab("")
+```
+
+Next, look at across track link distance 2 3 4
+model all 3 days- distance, continuous variable
+```{r}
+ac.distances.123.hpc_all <- distance.ac.123.copy %>%
+  filter(roi %in% hpcROIs, stim1_type == "LM",distance_comparison %in% acdists)
+ac.distances.123.hpc_all$subNum <- factor(ac.distances.123.hpc_all$subNum)
+
+model.ac.distances.123.hpc_all <- lmer(fisher_r ~ sesNum*distance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = ac.distances.123.hpc_all,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.123.hpc_all)
+```
+effect size 
+```{r}
+-2.891/sqrt(23)
+```
+
+```{r}
+tab_model(model.ac.distances.123.hpc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+### VMPFC
+```{r, fig.width=3, fig.height=2.5}
+wc.distances.123.vmpfc <- distance.ac.123.copy %>%
+  filter(roi == "VMPFC",stim1_type == "LM", distance_comparison %in% wcdists)
+
+withindist_vmpfc <- ggplot() + 
+  geom_errorbar(data=summary.wc.distances.123.vmpfc, aes(y=fisher_r, x=wcdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.wc.distances.123.vmpfc, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.wc.distances.123.vmpfc, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf("vmPFC")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+withindist_vmpfc
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/vmpfc_within_distance.png', withindist_vmpfc, dpi=600)
+```
+
+Plot mean pattern similarity for landmarks across all three sessions for all distance categories
+```{r, fig.width=5, fig.height=2}
+distance.ac.123.vmpfc.LM <- distance.ac.123.copy %>%
+  filter(roi == "VMPFC", stim1_type == "LM",distance_comparison%in% acdists)
+
+summary.distance.ac.123.vmpfc.LM <- summarySEwithin(data = distance.ac.123.vmpfc.LM, measurevar = "fisher_r", 
+                                                      withinvars = c("phase","stim1_type","acdistance"),idvar = 'subNum')
+
+vmpfc_across_distance <- ggplot() + 
+  geom_errorbar(data=summary.distance.ac.123.vmpfc.LM, aes(y=fisher_r, x=acdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.distance.ac.123.vmpfc.LM, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.distance.ac.123.vmpfc.LM, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf(vmpfc)) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+vmpfc_across_distance
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/vmpfc_across_distance.png', vmpfc_across_distance, dpi=600)
+```
+
+##### Split vmpfc into different groups to model
+First, look within track
+```{r}
+model.wc.distances.123.vmpfc <- lmer(fisher_r ~ sesNum*wcdistance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = wc.distances.123.vmpfc,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.wc.distances.123.vmpfc)
+contrasts.wc.distances.123.vmpfc <- emmeans(model.wc.distances.123.vmpfc, specs = pairwise~sesNum:wcdistance)
+contrasts.wc.distances.123.vmpfc
+```
+
+```{r}
+tab_model(model.wc.distances.123.vmpfc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.wc.distances.123.vmpfc$contrasts) %>%
+  filter(contrast == "1 1 - 1 2" | contrast == "2 1 - 2 2" | contrast == "3 1 - 3 2")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+vmpfc_withindist_contrasts <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ggtitle(label = 'Contrast Estimates', subtitle = sprintf(vmpfc)) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=12),
+        legend.position = "none") +  
+  ylab("Link Distance 1 - Link Distance 2 Similarity") +
+  xlab("")
+vmpfc_withindist_contrasts
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/vmpfc_withindist_contrasts.png', vmpfc_withindist_contrasts, dpi=600)
+```
+
+Next, look at across tracks, link distances 2 3 4
+model all 3 days- distance, continuous variable
+```{r}
+ac.distances.123.vmpfc <- distance.ac.123.copy %>%
+  filter(roi == "VMPFC", stim1_type == "LM",distance_comparison %in% acdists)
+ac.distances.123.vmpfc$subNum <- factor(ac.distances.123.vmpfc$subNum)
+
+summary.ac.distances.123.vmpfc <- summarySEwithin(data = ac.distances.123.vmpfc, measurevar = "fisher_r", 
+                                                      withinvars = c("sesNum","stim1_type","distance_comparison"),idvar = 'subNum')
+
+model.ac.distances.123.vmpfc <- lmer(fisher_r ~ sesNum*distance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = ac.distances.123.vmpfc,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.123.vmpfc)
+```
+
+```{r}
+tab_model(model.ac.distances.123.vmpfc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+### Do ROIs differ from each other
+Does control differ from HPC and VMPFC LMs 
+```{r}
+distance.ac.123.copy$region <- NA
+distance.ac.123.copy$region[distance.ac.123.copy$roi == "Calcarine"] <- "Calcarine"
+distance.ac.123.copy$region[distance.ac.123.copy$roi %in% hpcROIs] <- "HPC"
+distance.ac.123.copy$region[distance.ac.123.copy$roi == "VMPFC"] <- "VMPFC"
+distance.ac.123.copy$region <- factor(distance.ac.123.copy$region, levels = c("Calcarine","HPC","VMPFC"))
+
+df.123.regions <- distance.ac.123.copy %>%
+  filter(region != "NA", stim1_type == "LM")
+df.123.regions$subNum <- factor(df.123.regions$subNum)
+
+# model with Calcarine as ref 
+model.df.123.regions.hpc <- lmer(fisher_r ~ sesNum*distance*region
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = df.123.regions,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.df.123.regions.hpc)
+```
+Effect sizes
+```{r}
+-46.889/sqrt(23)
+-38.294/sqrt(23)
+5.102/sqrt(23)
+3.079/sqrt(21)
+5.129/sqrt(23)
+```
+
+```{r}
+tab_model(model.df.123.regions.hpc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+models to show whether HPC is behaving differently than vmpfc -- LMs
+```{r}
+distance.ac.123.copy$region2 <- NA
+distance.ac.123.copy$region2[distance.ac.123.copy$roi %in% hpcROIs] <- "HPC"
+distance.ac.123.copy$region2[distance.ac.123.copy$roi == "VMPFC"] <- "VMPFC"
+distance.ac.123.copy$region2 <- factor(distance.ac.123.copy$region2, levels = c("HPC","VMPFC"))
+
+df.123.regions2 <- distance.ac.123.copy %>%
+  filter(region2 != "NA", stim1_type == "LM")
+df.123.regions2$subNum <- factor(df.123.regions2$subNum)
+
+# model with HPC as ref 
+model.df.123.regions2 <- lmer(fisher_r ~ sesNum*distance*region2
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = df.123.regions2,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.df.123.regions2)
+```
+
+```{r}
+tab_model(model.df.123.regions2, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+## Calcarine
+Plot mean pattern similarity for landmarks across all three sessions for all distance categories
+```{r, fig.width=5, fig.height=2.5}
+distance.ac.123.calc.LM <- distance.ac.123.copy %>%
+  filter(roi == "Calcarine", stim1_type == "LM",distance_comparison!="NA")
+
+# within context distances
+wc123.test <- distance.ac.123.calc.LM %>%
+  filter(distance_comparison %in% wcdists)
+
+# across context all scans 
+ac123.test <- distance.ac.123.calc.LM %>%
+  filter(distance_comparison %in% acdists)
+
+summary.ac123.test.r <- summarySEwithin(data = ac123.test, measurevar = "fisher_r", withinvars = c("phase","stim1_type", "acdistance"),idvar = 'subNum')
+summary.ac123.test.r.sub <- summarySEwithin(data = ac123.test, measurevar = "fisher_r", withinvars = c("subNum","phase","stim1_type", "acdistance"))
+```
+
+```{r,fig.width=5, fig.height=2}
+acrossdist_control <- ggplot() + 
+  #geom_point(data=summary.ac123.test.r.sub, aes(y=fisher_r,x=acdistance,group=phase), alpha = .5, size = .5, position = position_dodge(0.05)) +
+  geom_errorbar(data=summary.ac123.test.r, aes(y=fisher_r, x=acdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.ac123.test.r, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.ac123.test.r, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf("Calcarine")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+acrossdist_control
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/control_across_distance.png', acrossdist_control, dpi=600)
+```
+
+First, look within track
+
+```{r, fig.width=3, fig.height=2.5}
+wc.distances.123.calc <- distance.ac.123.copy %>%
+  filter(roi == "Calcarine",stim1_type == "LM", distance_comparison %in% wcdists)
+
+summary.wc.distances.123.calc <- summarySEwithin(data = wc.distances.123.calc, measurevar = "fisher_r", withinvars = c("phase","stim1_type", "wcdistance"),idvar = 'subNum')
+```
+
+
+```{r,fig.width=5, fig.height=2}
+withindist_calc <- ggplot() + 
+  geom_errorbar(data=summary.wc.distances.123.calc, aes(y=fisher_r, x=wcdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.wc.distances.123.calc, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.wc.distances.123.calc, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf("Calcarine")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+withindist_calc
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/control_within_distance.png', withindist_calc, dpi=600)
+```
+
+```{r}
+contrasts(wc123.test$wcdistance) <- c(-0.5,0.5)
+colnames(attr(wc123.test$wcdistance,"contrasts")) = "LD2>LD1"
+
+
+model.wc.distances.123.calc <- lmer(fisher_r ~ sesNum*wcdistance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = wc123.test,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.wc.distances.123.calc)
+contrasts.wc.distances.123.calc <- emmeans(model.wc.distances.123.calc, specs = pairwise~sesNum:wcdistance)
+contrasts.wc.distances.123.calc
+```
+```{r}
+tab_model(model.wc.distances.123.calc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.wc.distances.123.calc$contrasts) %>%
+  filter(contrast == "1 1 - 1 2" | contrast == "2 1 - 2 2" | contrast == "3 1 - 3 2")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+control_localdist <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ggtitle(label = 'Contrast Estimates', subtitle = sprintf("Calcarine")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=12),
+        legend.position = "none") +  
+  ylab("Link Distance 1 - Link Distance 2 Similarity") +
+  xlab("")
+control_localdist
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/control_within_distance.png', control_localdist, dpi=600)
+```
+
+Next, look at across tracks 2 3 4
+model all 3 days- distance, continuous variable
+```{r}
+ac.distances.123.calc <- distance.ac.123.copy %>%
+  filter(roi == "Calcarine", stim1_type == "LM",distance_comparison %in% acdists)
+ac.distances.123.calc$subNum <- factor(ac.distances.123.calc$subNum)
+
+summary.ac.distances.123.calc <- summarySEwithin(data = ac.distances.123.calc, measurevar = "fisher_r", 
+                                                      withinvars = c("sesNum","stim1_type","distance_comparison"),idvar = 'subNum')
+
+model.ac.distances.123.calc <- lmer(fisher_r ~ sesNum*distance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = ac.distances.123.calc,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.123.calc)
+```
+
+```{r}
+tab_model(model.ac.distances.123.calc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+### EC
+#### Test for hemispheric differences
+Within only
+```{r}
+distance.wc.123.erc_all.LM <- distance.ac.123.copy %>%
+  filter(roi %in% ercROIs,stim1_type == "LM", distance_comparison!="NA", wcdistance != "NA")
+contrasts(distance.wc.123.erc_all.LM$wcdistance) <- c(-0.5,0.5)
+colnames(attr(distance.wc.123.erc_all.LM$wcdistance,"contrasts")) = "LD2>LD1"
+
+model.distance.wc.123.erc_all <- lmer(fisher_r ~ sesNum*wcdistance*roi + stim1_avgAct + stim2_avgAct
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = distance.wc.123.erc_all.LM,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.distance.wc.123.erc_all)
+```
+```{r}
+2.093/sqrt(20)
+2.835/sqrt(18)
+```
+
+```{r}
+tab_model(model.distance.wc.123.erc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+Across only
+```{r}
+distance.ac.123.erc_all.LM <- distance.ac.123.copy %>%
+  filter(roi %in% ercROIs,stim1_type == "LM", distance_comparison!="NA", acdistance != "NA") 
+distance.ac.123.erc_all.LM$acdistance <- as.numeric(distance.ac.123.erc_all.LM$acdistance)
+
+model.distance.ac.123.erc_all <- lmer(fisher_r ~ sesNum*acdistance*roi + stim1_avgAct + stim2_avgAct
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = distance.ac.123.erc_all.LM,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.distance.ac.123.erc_all)
+```
+
+```{r}
+tab_model(model.distance.ac.123.erc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+#### ERC_left within
+Plot mean pattern similarity for landmarks across all three sessions for all distance categories
+```{r, fig.width=5, fig.height=2.5}
+distance.ac.123.erc_left.LM <- distance.ac.123.copy %>%
+  filter(roi =="ERC_left", stim1_type == "LM",distance_comparison!="NA")
+
+distance.ac.123.erc_right.LM <- distance.ac.123.copy %>%
+  filter(roi =="ERC_right", stim1_type == "LM",distance_comparison!="NA")
+
+# within context distances 
+wc123.test.erc_L <- distance.ac.123.erc_left.LM %>%
+  filter(distance_comparison %in% wcdists)
+
+summary.wc123.test.r.erc_L <- summarySEwithin(data = wc123.test.erc_L, measurevar = "fisher_r", withinvars = c("phase","stim1_type", "wcdistance"),idvar = 'subNum')
+
+wc123.test.erc_R <- distance.ac.123.erc_right.LM %>%
+  filter(distance_comparison %in% wcdists)
+
+summary.wc123.test.r.erc_R <- summarySEwithin(data = wc123.test.erc_R, measurevar = "fisher_r", withinvars = c("phase","stim1_type", "wcdistance"),idvar = 'subNum')
+```
+
+```{r,fig.width=5, fig.height=2}
+withindist_erc_L <- ggplot() + 
+  geom_errorbar(data=summary.wc123.test.r.erc_L, aes(y=fisher_r, x=wcdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.wc123.test.r.erc_L, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.wc123.test.r.erc_L, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf("Left Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+withindist_erc_L
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/ercL_within_distance.png', withindist_erc_L, dpi=600)
+
+withindist_erc_R <- ggplot() + 
+  geom_errorbar(data=summary.wc123.test.r.erc_R, aes(y=fisher_r, x=wcdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.wc123.test.r.erc_R, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.wc123.test.r.erc_R, aes(y=fisher_r,x=wcdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf("Right Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+withindist_erc_R
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/ercR_within_distance.png', withindist_erc_R, dpi=600)
+```
+
+##### Split ERC into different groups to model for within
+ERC LEFT
+```{r, fig.width=3, fig.height=2.5}
+contrasts(wc123.test.erc_L$wcdistance) <- c(-0.5,0.5)
+colnames(attr(wc123.test.erc_L$wcdistance,"contrasts")) = "LD2>LD1"
+
+
+model.wc.distances.123.erc_left <- lmer(fisher_r ~ sesNum*wcdistance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = wc123.test.erc_L,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.wc.distances.123.erc_left)
+contrasts.wc.distances.123.erc_left <- emmeans(model.wc.distances.123.erc_left, specs = pairwise~sesNum:wcdistance)
+contrasts.wc.distances.123.erc_left
+```
+
+```{r}
+tab_model(model.wc.distances.123.erc_left, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.wc.distances.123.erc_left$contrasts) %>%
+  filter(contrast == "1 1 - 1 2" | contrast == "2 1 - 2 2" | contrast == "3 1 - 3 2")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+ercL_within_dist <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ggtitle(label = 'Contrast Estimates', subtitle = sprintf("Left Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  ylim(-0.05,0.051) +
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=12),
+        legend.position = "none") +  
+  ylab("Link Distance 1 - Link Distance 2 Similarity") +
+  xlab("")
+ercL_within_dist
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/ercL_within_dist.png', ercL_within_dist, dpi=600)
+```
+
+ERC RIGHT
+```{r, fig.width=3, fig.height=2.5}
+contrasts(wc123.test.erc_R$wcdistance) <- c(-0.5,0.5)
+colnames(attr(wc123.test.erc_R$wcdistance,"contrasts")) = "LD2>LD1"
+
+
+model.wc.distances.123.erc_right <- lmer(fisher_r ~ sesNum*wcdistance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = wc123.test.erc_R,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.wc.distances.123.erc_right)
+contrasts.wc.distances.123.erc_right <- emmeans(model.wc.distances.123.erc_right, specs = pairwise~sesNum:wcdistance)
+contrasts.wc.distances.123.erc_right
+```
+
+```{r}
+tab_model(model.wc.distances.123.erc_right, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.wc.distances.123.erc_right$contrasts) %>%
+  filter(contrast == "1 1 - 1 2" | contrast == "2 1 - 2 2" | contrast == "3 1 - 3 2")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+ercR_within_dist <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ggtitle(label = 'Contrast Estimates', subtitle = sprintf("Right Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  ylim(-0.05,0.051) +
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=12),
+        legend.position = "none") +  
+  ylab("Link Distance 1 - Link Distance 2 Similarity") +
+  xlab("")
+ercR_within_dist
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/ercR_within_dist.png', ercR_within_dist, dpi=600)
+```
+
+#### Bilateral EC for across track model 
+Next, look at across 2 3 4
+model all 3 days- distance, continuous variable
+```{r}
+ac.distances.123.erc_all <- distance.ac.123.copy %>%
+  filter(roi %in% ercROIs, stim1_type == "LM",distance_comparison %in% acdists)
+ac.distances.123.erc_all$subNum <- factor(ac.distances.123.erc_all$subNum)
+
+model.ac.distances.123.erc_all <- lmer(fisher_r ~ sesNum*distance
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = ac.distances.123.erc_all,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.ac.distances.123.erc_all)
+```
+
+```{r,fig.width=5, fig.height=2}
+summary.distance.ac.123.erc.LM <- summarySEwithin(data = ac.distances.123.erc_all, measurevar = "fisher_r", 
+                                                      withinvars = c("phase","stim1_type","acdistance"),idvar = 'subNum')
+
+summary.distance.ac.123.erc.LM.sub <- summarySEwithin(data = ac.distances.123.erc_all, measurevar = "fisher_r", 
+                                                      withinvars = c("subNum","phase","stim1_type","acdistance"))
+
+erc_across_distance <- ggplot() + 
+  geom_errorbar(data=summary.distance.ac.123.erc.LM, aes(y=fisher_r, x=acdistance, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.distance.ac.123.erc.LM, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 1.5) +
+  geom_point(data=summary.distance.ac.123.erc.LM, aes(y=fisher_r,x=acdistance,group=phase,color=phase), size = 3, position = position_dodge(0.05)) +
+  ggtitle(label = sprintf("Bilateral Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") +  
+  ylab("Mean Pattern Similarity")+
+  xlab("Link Distance")+
+  labs(color="Study Phase")+
+  facet_wrap(~phase)
+erc_across_distance
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/erc_across_distance.png', erc_across_distance, dpi=600)
+```
+
+```{r}
+tab_model(model.ac.distances.123.erc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```

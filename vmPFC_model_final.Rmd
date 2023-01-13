@@ -1,0 +1,93 @@
+---
+title: "vmpfc_model_analysis"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    code_folding: hide
+    toc: yes
+  html_document:
+    code_folding: hide
+    highlight: pygments
+    theme: flatly
+    toc: yes
+---
+# This notebook conducts an analyses for Representational integration and differentiation in the human hippocampus following goal directed navigation by Fernandez et al., 2023
+
+Load Packages 
+```{r load necessary packages and dataframe, warning=FALSE, message =FALSE}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(stringr)
+library(lattice)
+library(emmeans)
+library(languageR)
+library(performance)
+library(effects)
+library(Rmisc)
+library(reshape)
+library(tidyr)
+library(ez)
+library(car)
+```
+
+# Load and clean data
+```{r}
+# load the correlations
+df = read.csv('~/Dropbox/Project/analysis/mixedmodels/HPC_PAPER/Finals_github/data_vmpfc_model.csv',header = T)   
+
+# exclude data previously determined 
+df <- df %>%
+  filter(!(subNum == "17" & sesNum == "3"))
+
+# figure color schemes
+colors123 <- c('#76dfca', '#44999e', '#005a74')
+colors12 <- c('#76dfca', '#44999e')
+colors23 <- c('#44999e', '#005a74')
+colors13 <- c('#76dfca','#005a74')
+colorsbehav <- c('#a21a45', '#93003a') # '#d08c88', '#f4777f' '#f1aaa6'
+
+# lists and names of things we will use later
+vmpfc <- "vmPFC"
+hpc_left = "Left hippocampus"
+hpc_right = "Right Hippocampus"
+hpc_all = "Bilateral Hippocampus"
+hpcROIs <- c("HPC_left", "HPC_right")
+ercROIs <- c("ERC_left", "ERC_right")
+
+btwdists <- c("2 (within-context)","2 (across-contexts)")
+wcdists <- c("1 (within-context)", "2 (within-context)")
+acdists <- c("2 (across-contexts)", "3 (across-contexts)", "4 (across-contexts)")
+```
+
+Average columns for HPC and RSC to get one value 
+```{r}
+df$fisher_r_HPCbilateral = (df$fisher_r_HPCL + df$fisher_r_HPCR) / 2
+df$stim1_avgAct_HPCbilateral = (df$stim1_avgAct_HPCL + df$stim1_avgAct_HPCR) / 2
+df$stim2_avgAct_HPCbilateral = (df$stim2_avgAct_HPCL + df$stim2_avgAct_HPCR) / 2
+```
+
+model 
+```{r}
+df$sesNum <- factor(df$sesNum)
+
+model.vmpfc <- lmer(fisher_r_vmpfc ~ (sesNum*fisher_r_HPCbilateral) + (sesNum*fisher_r_Calcarine)
+                       + stim1_avgAct_HPCbilateral + stim2_avgAct_HPCbilateral + stim1_avgAct_vmpfc
+                       + stim2_avgAct_vmpfc + stim1_avgAct_Calcarine + stim2_avgAct_Calcarine 
+                       + (1 + sesNum + fisher_r_HPCbilateral + fisher_r_Calcarine | subNum),
+                       data = df,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.vmpfc)
+contrasts.model.vmpfc <- emmeans(model.vmpfc, specs = pairwise~sesNum:fisher_r_HPCbilateral)
+contrasts.model.vmpfc
+```
+
+```{r}
+-5.713/sqrt(21)
+-4.355/sqrt(21)
+```
+
+```{r}
+tab_model(model.vmpfc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```

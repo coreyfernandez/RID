@@ -1,0 +1,856 @@
+---
+title: "Context_Analysis"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    code_folding: hide
+    toc: yes
+  html_document:
+    code_folding: hide
+    highlight: pygments
+    theme: flatly
+    toc: yes
+---
+# This notebook conducts analyses for Representational integration and differentiation in the human hippocampus following goal directed navigation by Fernandez et al., 2023
+
+# These analyses look at items within a track vs across tracks
+
+Load Packages 
+```{r load necessary packages and dataframe, warning=FALSE, message =FALSE}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(stringr)
+library(lattice)
+library(emmeans)
+library(languageR)
+library(performance)
+library(effects)
+library(Rmisc)
+library(reshape)
+library(tidyr)
+library(ez)
+library(car)
+library(sjPlot)
+```
+
+# Load and clean data
+```{r}
+# load the data
+df1 = read.csv('~/Dropbox/Project/analysis/mixedmodels/psa_longform_allSubs_vmpfc.csv',header = T)   # if on laptop
+df2 = read.csv('~/Dropbox/Project/analysis/mixedmodels/psa_longform_allSubs_june2021.csv',header = T) # remove random column
+df3 = read.csv('~/Dropbox/Project/analysis/mixedmodels/psa_longform_allSubs_controls.csv',header = T)
+df2$X <- NULL
+
+df = rbind(df1,df2,df3) # combine dfs
+
+# exclude data previously determined 
+df <- df %>%
+  filter(!(subNum == "17" & sesNum == "3"), !(subNum == "3" & roi == "ERC_right"), !(subNum == "5" & sesNum == "2" & roi == "ERC_right"), !(subNum == "5" & sesNum == "3" & roi == "ERC_right"), !(subNum == "16" & sesNum == "2" & roi == "ERC_left"), !(subNum == "29" & sesNum == "1" & roi == "ERC_right"), !(subNum == "29" & sesNum == "2" & roi == "ERC_right"))
+
+# figure color schemes
+colors123 <- c('#76dfca', '#44999e', '#005a74')
+colors12 <- c('#76dfca', '#44999e')
+colors23 <- c('#44999e', '#005a74')
+colors13 <- c('#76dfca','#005a74')
+colorsbehav <- c('#a21a45', '#93003a') # '#d08c88', '#f4777f' '#f1aaa6'
+
+# lists and names of things we will use later
+vmpfc <- "vmPFC"
+hpc_left = "Left hippocampus"
+hpc_right = "Right Hippocampus"
+hpc_all = "Bilateral Hippocampus"
+hpcROIs <- c("HPC_left", "HPC_right")
+ercROIs <- c("ERC_left", "ERC_right")
+
+btwdists <- c("2 (within-context)","2 (across-contexts)")
+wcdists <- c("1 (within-context)", "2 (within-context)")
+acdists <- c("2 (across-contexts)", "3 (across-contexts)", "4 (across-contexts)")
+```
+
+Create new columns for comparisons of interest: stimtype_comparison, context_comparison
+```{r}
+# get rid of this stupid space that is somehow in the csvs 
+df$stim1_context[df$stim1_context=="hub "]="hub"
+df$stim1_context=droplevels(df$stim1_context)
+
+# clean up and factor subNum, sesNum
+df$subNum <- sapply(df$subNum, function(x) sprintf('%.2d',x))
+df$subNum <- factor(df$subNum)
+
+# Add new column for stimtype comparison, factor the result
+df$stimtype_comparison <- NA
+df$stimtype_comparison[df$stim1_type == df$stim2_type] <- "within-stimulus category"
+df$stimtype_comparison[df$stim1_type != df$stim2_type] <- "across-stimulus category"
+df$stimtype_comparison[df$stim1_ID == df$stim2_ID] <- "self"
+df$stimtype_comparison <- factor(df$stimtype_comparison, levels = c("self","within-stimulus category","across-stimulus category"))
+
+# # Add new column for context comparison, factor the result
+df$context_comparison <- NA
+df$context_comparison[df$stim1_context == df$stim2_context] <- "within-context"
+df$context_comparison[df$stim1_context != df$stim2_context] <- "across-contexts"
+df$context_comparison[df$stim1_ID == df$stim2_ID] <- "self"
+df$context_comparison <- factor(df$context_comparison, levels = c("self","within-context","across-contexts"))
+
+# Add new column for distance comparisons, factor the result
+lm4 <- c("6","9","10","11")
+lm6 <- c("1","4","10","12")
+lm10 <- c("2","4","6","8")
+hubs <- c("3","5","7")
+df$distance_comparison <- NA
+df$distance_comparison[(df$stim1_context == df$stim2_context) & (df$distance == "1")] <- "1 (within-context)"
+df$distance_comparison[(df$stim1_context == df$stim2_context) & (df$distance == "2")] <- "2 (within-context)"
+df$distance_comparison[(df$stim1_ID == "4") & (df$stim2_ID %in% lm4)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim2_ID == "4") & (df$stim1_ID %in% lm4)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim1_ID == "6") & (df$stim2_ID %in% lm6)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim2_ID == "6") & (df$stim1_ID %in% lm6)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim1_ID == "10") & (df$stim2_ID %in% lm10)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim2_ID == "10") & (df$stim1_ID %in% lm10)] <- "2 (across-contexts)"
+df$distance_comparison[(df$stim1_context != df$stim2_context) & (df$distance == "3.5") & (df$stim1_hubtype != "hub") & (df$stim2_hubtype != "hub")] <- "3 (across-contexts)"
+df$distance_comparison[(df$stim1_context != df$stim2_context) & (df$distance == "4") & (df$stim1_hubtype != "hub") & (df$stim2_hubtype != "hub")] <- "4 (across-contexts)"
+df$distance_comparison[(df$stim1_context != df$stim2_context) & (df$distance == "4.5")& (df$stim1_hubtype != "hub") & (df$stim2_hubtype != "hub")] <- "4 (across-contexts)"
+df$distance_comparison <- factor(df$distance_comparison, levels = c("1 (within-context)", "2 (within-context)", "2 (across-contexts)", "3 (across-contexts)", "4 (across-contexts)"))
+
+# Add new column for within-context distance comparison, factor the result
+df$wcdistance <- NA
+df$wcdistance[df$distance_comparison == "1 (within-context)"] <- "1"
+df$wcdistance[df$distance_comparison == "2 (within-context)"] <- "2"
+df$wcdistance <- factor(df$wcdistance)
+
+# Add new column for across-contexts distance comparison, factor the result
+df$acdistance <- NA
+df$acdistance[df$distance_comparison == "2 (across-contexts)"] <- "2"
+df$acdistance[df$distance_comparison == "3 (across-contexts)"] <- "3"
+df$acdistance[df$distance_comparison == "4 (across-contexts)"] <- "4"
+df$acdistance <- factor(df$acdistance)
+
+# Add new column for renaming sesNum, factor the result
+df$phase <- NA
+df$phase[df$sesNum == "1"] <- "Pre-Learning"
+df$phase[df$sesNum == "2"] <- "Post Local Navigation"
+df$phase[df$sesNum == "3"] <- "Post Global Navigation"
+df$phase <- factor(df$phase, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+```
+
+Subset data for context models
+```{r}
+# separate into within and across dfs, get rid of LM hubs and diagonal. keep fr hubs for now. 
+df.123 <- df%>%
+  filter(!(stim1_type == "LM" & stim1_hubtype == "hub"), !(stim2_type == "LM" & stim2_hubtype == "hub"), !(stimtype_comparison == "self"), !(context_comparison == "self"))
+
+# refactor everything 
+df.123$stimtype_comparison <- factor(df.123$stimtype_comparison, levels = c("self","within-stimulus category","across-stimulus category"))
+df.123$context_comparison <- factor(df.123$context_comparison, levels = c("within-context","across-contexts"))
+df.123$subNum <- factor(df.123$subNum)
+df.123$sesNum <- factor(df.123$sesNum)
+
+### Set contrasts appropriately ###
+# make a copy of the data
+df.123.copy <- data.frame(df.123)
+
+df.123.copy <- df.123.copy %>%
+  filter(stimtype_comparison!="self")
+df.123.copy$stimtype_comparison <- factor(df.123.copy$stimtype_comparison, levels = c("within-stimulus category","across-stimulus category"))
+
+# sum coding for stimtype_comparison, context comparison, stim1_type (and stim2_type jic), hub_comparison
+contrasts(df.123.copy$stim1_type) <- c(-0.5,0.5)
+colnames(attr(df.123.copy$stim1_type,"contrasts")) = "LM>FR"
+contrasts(df.123.copy$stim2_type) <- c(-0.5,0.5)
+colnames(attr(df.123.copy$stim2_type,"contrasts")) = "LM>FR"
+contrasts(df.123.copy$stimtype_comparison) <- c(0.5,-0.5)
+colnames(attr(df.123.copy$stimtype_comparison,"contrasts")) = "within>across"
+contrasts(df.123.copy$context_comparison) <- c(0.5,-0.5)
+colnames(attr(df.123.copy$context_comparison,"contrasts")) = "within>across"
+```
+
+# ERC
+Omnibus model that includes hemisphere
+```{r}
+data.123.erc_all <- df.123.copy %>%
+  filter(roi %in% ercROIs)
+data.123.erc_all$subNum <- factor(data.123.erc_all$subNum)
+
+model.123.erc_all <- lmer(fisher_r ~ sesNum*stim1_type*context_comparison*roi + stim1_avgAct + stim2_avgAct 
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.erc_all, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.erc_all)
+contrasts.123.erc_all <- emmeans(model.123.erc_all, specs = pairwise~sesNum:context_comparison)
+contrasts.123.erc_all
+```
+Effect sizes
+```{r}
+-6.06/sqrt(18)
+4.192/sqrt(18)
+10.552/sqrt(18)
+-2.046/sqrt(18)
+```
+
+```{r}
+tab_model(model.123.erc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+## ERC_left (all stimuli)
+### Model all three sessions
+No interaction for stimtype, so don't include in model 
+```{r, fig.width=5, fig.height=3}
+data.erc_left <- df.123 %>%
+  filter(roi == "ERC_left")
+data.123.erc_left <- df.123.copy %>%
+  filter(roi == "ERC_left")
+
+model.123.erc_left <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.erc_left, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.erc_left)
+contrasts.123.erc_left <- emmeans(model.123.erc_left, specs = pairwise~sesNum:context_comparison)
+```
+effect size 
+```{r}
+-2.339/sqrt(20)
+```
+
+```{r}
+tab_model(model.123.erc_left, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+Don't facet by stimtype to look at the interaction
+```{r, fig.width=5, fig.height=2.5}
+summary.123.erc_left.allstim<- summarySEwithin(data = data.123.erc_left, measurevar = "fisher_r", withinvars = c('phase','context_comparison'), idvar = 'subNum')
+
+LEC_context_mps <- ggplot() + 
+  geom_errorbar(data=summary.123.erc_left.allstim, aes(y=fisher_r, x=context_comparison, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.123.erc_left.allstim, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size=1.5) +
+  geom_point(data=summary.123.erc_left.allstim, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size = 3) +
+  ggtitle(label = "Left Entorhinal Cortex") + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  scale_x_discrete(labels=c("Within-Track\nItems", "Across-Track\nItems"))+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, face="bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=14),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position="None") + 
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ylab("Mean Pattern Similarity") +
+  facet_wrap(~phase)
+LEC_context_mps
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/mps_context_ecL.png', LEC_context_mps, dpi=600)
+```
+
+#### Context coding score
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.123.erc_left$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_ecL <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Left Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.017,0.013))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_ecL
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_ecL.png', context_ecL, dpi=600)
+```
+
+## ERC right
+
+### Model all three sessions
+```{r, fig.width=5, fig.height=3}
+data.erc_right <- df.123 %>%
+  filter(roi == "ERC_right")
+data.123.erc_right <- df.123.copy %>%
+  filter(roi == "ERC_right")
+
+model.123.erc_right <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.erc_right, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.erc_right)
+contrasts.123.erc_right <- emmeans(model.123.erc_right, specs = pairwise~sesNum:context_comparison)
+contrasts.123.erc_right
+```
+
+```{r}
+tab_model(model.123.erc_right, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+Don't facet by stimtype to look at the interaction
+```{r, fig.width=5, fig.height=2.5}
+summary.123.erc_right.allstim<- summarySEwithin(data = data.123.erc_right, measurevar = "fisher_r", withinvars = c('phase','context_comparison'), idvar = 'subNum')
+summary.123.erc_right.allstim.sub <- summarySEwithin(data = data.123.erc_right, measurevar = "fisher_r", withinvars = c('subNum','phase','context_comparison'))
+
+REC_context_mps <- ggplot() + 
+  geom_errorbar(data=summary.123.erc_right.allstim, aes(y=fisher_r, x=context_comparison, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.123.erc_right.allstim, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size=1.5) +
+  geom_point(data=summary.123.erc_right.allstim, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size = 3) +
+  ggtitle(label = "Right Entorhinal Cortex") + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  scale_x_discrete(labels=c("Within-Track\nItems", "Across-Track\nItems"))+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, face="bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=14),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position="None") + 
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  ylab("Mean Pattern Similarity") +
+  facet_wrap(~phase)
+REC_context_mps
+#ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/mps_context_ecR.png', REC_context_mps, dpi=600)
+```
+
+#### Context coding score
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.123.erc_right$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_ecR <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Right Entorhinal Cortex")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.017,0.013))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_ecR
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_ecR.png', context_ecR, dpi=600)
+```
+
+# HPC
+Omnibus model
+```{r}
+data.123.hpc_all <- df.123.copy %>%
+  filter(roi %in% hpcROIs)
+data.123.hpc_all$subNum <- factor(data.123.hpc_all$subNum)
+
+model.123.hpc_all <- lmer(fisher_r ~ sesNum*stim1_type*context_comparison*roi + stim1_avgAct + stim2_avgAct
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.hpc_all,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.hpc_all)
+contrasts.123.hpc_all <- emmeans(model.123.hpc_all, specs = pairwise~sesNum:stim1_type)
+contrasts.123.hpc_all
+```
+
+Effect size calcs
+```{r}
+2.756/sqrt(21)
+-3.477/sqrt(21)
+3.795/sqrt(21)
+2.422/sqrt(21)
+-2.604/sqrt(21)
+```
+
+```{r}
+tab_model(model.123.hpc_all, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+## HPC_left
+```{r, fig.width=5, fig.height=3}
+data.hpc_left <- df.123 %>%
+  filter(roi == "HPC_left")
+data.123.hpc_left <- df.123.copy %>%
+  filter(roi == "HPC_left")
+
+data.hpc_left.LM <- df.123 %>%
+  filter(roi == "HPC_left", stim1_type == "LM")
+data.123.hpc_left.LM <- df.123.copy %>%
+  filter(roi == "HPC_left", stim1_type == "LM")
+
+data.hpc_left.FR <- df.123 %>%
+  filter(roi == "HPC_left", stim1_type == "FR")
+data.123.hpc_left.FR <- df.123.copy %>%
+  filter(roi == "HPC_left", stim1_type == "FR")
+
+summary.hpc_left.LM <- summarySEwithin(data = data.123.hpc_left.LM, measurevar = "fisher_r", withinvars = c('phase','stim1_type','context_comparison'), idvar = 'subNum')
+
+ggplot() + 
+  geom_errorbar(data=summary.hpc_left.LM, aes(y=fisher_r, x=context_comparison, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.hpc_left.LM, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size=1.5) +
+  geom_point(data=summary.hpc_left.LM, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size = 3) +
+  ggtitle(label = "Left Hippocampus") + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  scale_x_discrete(labels=c("Within-Context\nItems", "Across-Context\nItems"))+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, face="bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=14),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position="None") + 
+  ylab("Mean Pattern Similarity") +
+  facet_wrap(~phase)
+```
+
+```{r}
+model.123.hpc_left.LM <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.hpc_left.LM, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.hpc_left.LM)
+contrasts.123.hpc_left.LM <- emmeans(model.123.hpc_left.LM, specs = pairwise~sesNum:context_comparison)
+contrasts.123.hpc_left.LM
+```
+
+```{r}
+tab_model(model.123.hpc_left.LM, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.123.hpc_left.LM$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_hpcL_LMs <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Left Hippocampus")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.012,0.011))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_hpcL_LMs
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_hpcL_LMs.png',context_hpcL_LMs, dpi=600)
+```
+
+```{r}
+model.123.hpc_left.FR <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.hpc_left.FR, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.hpc_left.FR)
+contrasts.123.hpc_left.FR <- emmeans(model.123.hpc_left.FR, specs = pairwise~sesNum:context_comparison)
+contrasts.123.hpc_left.FR
+```
+
+```{r}
+tab_model(model.123.hpc_left.FR, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingFR <- summary(contrasts.123.hpc_left.FR$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingFR$sesNum <- ses
+concodingFR$sesNum <- factor(concodingFR$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_hpcL_FRs <- ggplot() + 
+  geom_bar(data = concodingFR, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingFR,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Left Hippocampus")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.012,0.011))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_hpcL_FRs
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_hpcL_FRs.png',context_hpcL_FRs, dpi=600)
+```
+
+## HPC_right
+```{r, fig.width=5, fig.height=3}
+data.hpc_right <- df.123 %>%
+  filter(roi == "HPC_right")
+data.123.hpc_right <- df.123.copy %>%
+  filter(roi == "HPC_right")
+
+data.hpc_right.LM <- df.123 %>%
+  filter(roi == "HPC_right", stim1_type == "LM")
+data.123.hpc_right.LM <- df.123.copy %>%
+  filter(roi == "HPC_right", stim1_type == "LM")
+
+data.hpc_right.FR <- df.123 %>%
+  filter(roi == "HPC_right", stim1_type == "FR")
+data.123.hpc_right.FR <- df.123.copy %>%
+  filter(roi == "HPC_right", stim1_type == "FR")
+
+summary.hpc_right.LM <- summarySEwithin(data = data.123.hpc_right.LM, measurevar = "fisher_r", withinvars = c('phase','stim1_type','context_comparison'), idvar = 'subNum')
+
+summary.hpc_right.LM.sub <- summarySEwithin(data = data.123.hpc_right.LM, measurevar = "fisher_r", withinvars = c('subNum','phase','stim1_type','context_comparison'))
+
+ggplot() + 
+  geom_errorbar(data=summary.hpc_right.LM, aes(y=fisher_r, x=context_comparison, group=phase,color=phase,ymin=fisher_r-se,ymax=fisher_r+se),size =1,width=.1, position = position_dodge(0.05)) +
+  geom_line(data=summary.hpc_right.LM, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size=1.5) +
+  geom_point(data=summary.hpc_right.LM, aes(y=fisher_r,x=context_comparison,group=phase,color=phase),position = position_dodge(0.05), size = 3) +
+  ggtitle(label = "Right Hippocampus") + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  scale_x_discrete(labels=c("Within-Context\nItems", "Across-Context\nItems"))+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, face="bold", size=16),
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=14),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position="None") + 
+  ylab("Mean Pattern Similarity") +
+  facet_wrap(~phase)
+```
+
+```{r}
+model.123.hpc_right.LM <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.hpc_right.LM, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.hpc_right.LM)
+contrasts.123.hpc_right.LM <- emmeans(model.123.hpc_right.LM, specs = pairwise~sesNum:context_comparison)
+contrasts.123.hpc_right.LM
+```
+
+```{r}
+tab_model(model.123.hpc_right.LM, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+effect size
+```{r}
+-2.014/sqrt(21)
+```
+
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.123.hpc_right.LM$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_hpcR_LMs <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Right Hippocampus")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  scale_y_continuous(limits=c(-0.012,0.011))+
+  theme_classic()+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_hpcR_LMs
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_hpcR_LMs.png',context_hpcR_LMs, dpi=600)
+```
+
+```{r}
+model.123.hpc_right.FR <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.hpc_right.FR, 
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.hpc_right.FR)
+contrasts.123.hpc_right.FR <- emmeans(model.123.hpc_right.FR, specs = pairwise~sesNum:context_comparison)
+contrasts.123.hpc_right.FR
+```
+
+```{r}
+tab_model(model.123.hpc_right.FR, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingFR <- summary(contrasts.123.hpc_right.FR$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingFR$sesNum <- ses
+concodingFR$sesNum <- factor(concodingFR$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_hpcR_FRs <- ggplot() + 
+  geom_bar(data = concodingFR, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingFR,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Right Hippocampus")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.012,0.011))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_hpcR_FRs
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_hpcR_FRs.png',context_hpcR_FRs, dpi=600)
+```
+
+### Do HPC and ERC ROIs differ from each other
+```{r}
+df.123.copy$region <- NA
+df.123.copy$region[df.123.copy$roi %in% hpcROIs] <- "HPC"
+df.123.copy$region[df.123.copy$roi %in% ercROIs] <- "ERC"
+df.123.copy$region <- factor(df.123.copy$region, levels = c("HPC","ERC"))
+
+df.123.regions <- df.123.copy %>%
+  filter(region != "NA")
+df.123.regions$subNum <- factor(df.123.regions$subNum)
+
+# model with HPC as ref 
+model.df.123.regions <- lmer(fisher_r ~ sesNum*context_comparison*region
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = df.123.regions,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.df.123.regions)
+```
+Effect sizes
+```{r}
+-7.36/sqrt(18)
+-5.757/sqrt(18)
+4.592/sqrt(18)
+```
+
+```{r}
+tab_model(model.df.123.regions, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+### Do HPC and VMPFC ROIs differ from each other
+```{r}
+df.123.copy$region2 <- NA
+df.123.copy$region2[df.123.copy$roi %in% hpcROIs] <- "HPC"
+df.123.copy$region2[df.123.copy$roi == "VMPFC"] <- "VMPFC"
+df.123.copy$region2 <- factor(df.123.copy$region2, levels = c("HPC","VMPFC"))
+
+df.123.regions2 <- df.123.copy %>%
+  filter(region2 != "NA")
+df.123.regions2$subNum <- factor(df.123.regions2$subNum)
+
+# model with HPC as ref 
+model.df.123.regions2 <- lmer(fisher_r ~ sesNum*context_comparison*region2
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = df.123.regions2,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.df.123.regions2)
+```
+
+```{r}
+tab_model(model.df.123.regions2, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+Do HPC, ERC, and vmpfc differ from visual control?
+```{r}
+df.123.copy$region3 <- NA
+df.123.copy$region3[df.123.copy$roi == "Calcarine"] <- "Calcarine"
+df.123.copy$region3[df.123.copy$roi %in% hpcROIs] <- "HPC"
+df.123.copy$region3[df.123.copy$roi %in% ercROIs] <- "ERC"
+df.123.copy$region3[df.123.copy$roi == "VMPFC"] <- "VMPFC"
+df.123.copy$region3 <- factor(df.123.copy$region3, levels = c("Calcarine","HPC","ERC","VMPFC"))
+
+df.123.regions3 <- df.123.copy %>%
+  filter(region3 != "NA")
+df.123.regions3$subNum <- factor(df.123.regions3$subNum)
+
+# model with calc as ref
+model.df.123.regions3 <- lmer(fisher_r ~ sesNum*context_comparison*region3
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = df.123.regions3,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(model.df.123.regions3)
+```
+
+```{r}
+176.735/sqrt(21)
+181.929/sqrt(21)
+144.553/sqrt(21)
+7.233/sqrt(23)
+7.673/sqrt(21)
+3.024/sqrt(23)
+9.957/sqrt(21)
+7.029/sqrt(23)
+2.633/sqrt(21)
+```
+
+```{r}
+tab_model(model.df.123.regions3, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+## vmpfc
+##### subset and plot raw data for all 3 sessions
+```{r, fig.width=5, fig.height=3}
+data.vmpfc <- df.123 %>%
+  filter(roi == "VMPFC")
+data.123.vmpfc <- df.123.copy %>%
+  filter(roi == "VMPFC")
+# do we need to run separate models for LMs and FRs?
+model.123.vmpfc.1 <- lmer(fisher_r ~ sesNum*stim1_type*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.vmpfc,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.vmpfc.1)
+# no, one model
+model.123.vmpfc <- lmer(fisher_r ~ sesNum*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.vmpfc,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.vmpfc)
+contrasts.123.vmpfc <- emmeans(model.123.vmpfc, specs = pairwise~sesNum:context_comparison)
+contrasts.123.vmpfc
+```
+
+```{r}
+tab_model(model.123.vmpfc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+#### Context coding score
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.123.vmpfc$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_vmpfc <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("vmPFC")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.017,0.013))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_vmpfc
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_vmpfc.png', context_vmpfc, dpi=600)
+```
+
+## Calcarine 
+```{r, fig.width=5, fig.height=3}
+data.calc <- df.123 %>%
+  filter(roi == "Calcarine")
+data.123.calc <- df.123.copy %>%
+  filter(roi == "Calcarine")
+
+model.123.calc <- lmer(fisher_r ~ sesNum*stim1_type*context_comparison
+                       + stim1_avgAct + stim2_avgAct + v1_similarity + IT_similarity
+                       + (1 + sesNum + stim1_avgAct + stim2_avgAct | subNum),
+                       data = data.123.calc,
+                       control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+
+summary(model.123.calc)
+```
+
+```{r}
+tab_model(model.123.calc, digits = 3,show.se = TRUE,show.stat = TRUE,show.ci =FALSE)
+```
+
+#### Context coding score
+compute contrasts and SEs, plot 
+```{r, fig.height=2.5, fig.width=3}
+ses <- c("Pre-Learning", "Post Local Navigation", "Post Global Navigation")
+concodingLM <- summary(contrasts.123.hpc_all$contrasts) %>%
+  filter(contrast == "(1 within-context) - (1 across-contexts)" | contrast == "(2 within-context) - (2 across-contexts)" | contrast == "(3 within-context) - (3 across-contexts)")
+concodingLM$sesNum <- ses
+concodingLM$sesNum <- factor(concodingLM$sesNum, levels = c("Pre-Learning", "Post Local Navigation", "Post Global Navigation"))
+
+context_ecL <- ggplot() + 
+  geom_bar(data = concodingLM, aes(y=estimate,x=sesNum,fill=sesNum),stat = "identity") + 
+  geom_errorbar(data = concodingLM,aes(y=estimate, x=sesNum, fill=sesNum,ymin=estimate-SE,ymax=estimate+SE), width=0.2, color = "black") +
+  ggtitle(label = '', subtitle = sprintf("Calcarine")) + 
+  scale_fill_manual(values = colors123)+
+  scale_color_manual(values = colors123)+
+  geom_hline(yintercept = 0, alpha = 0.2) +
+  theme_classic()+
+  scale_y_continuous(limits=c(-0.017,0.013))+
+  theme(plot.title = element_text(hjust=0.5, size = 14), 
+        plot.subtitle = element_text(hjust = 0.5, face = "bold", size = 14), 
+        axis.text.x = element_text(size=11),
+        axis.text.y = element_text(size=11),
+        axis.title.y = element_text(size=14),
+        legend.position = "none") + 
+  ylab("Within - Across Context Similarity") +
+  xlab("")
+context_ecL
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/context_control.png', context_ecL, dpi=600)
+```

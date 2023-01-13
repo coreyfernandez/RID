@@ -1,0 +1,1126 @@
+---
+title: "Behavioral_Analyses_Paper"
+output:
+  html_document:
+    code_folding: hide
+    highlight: pygments
+    theme: flatly
+    toc: yes
+  html_notebook:
+    toc: yes
+    code_folding: hide
+---
+# This notebook conducts the behavioral analyses for Representational integration and differentiation in the human hippocampus following goal directed navigation by Fernandez et al., 2023
+
+##Load Packages 
+```{r load necessary packages and dataframe, warning=FALSE, message =FALSE}
+library(stringr)
+library(ggplot2)
+require(gridExtra)
+library(grid)
+library(lattice)
+require(gtable)
+library(lme4)
+require(lmerTest)
+library(ez)
+library(effects)
+library(rlang)
+library(scales)
+library(tidyverse)
+library(emmeans)
+library(languageR)
+library(performance)
+library(reshape)
+library(car)
+library(dplyr)
+library(gganimate)
+library(ggridges)
+library(Rmisc)
+library(sjPlot)
+```
+
+Chance levels
+```{r}
+#local nav
+1/4
+#global nav
+1/14
+```
+
+### Standard Functions
+```{r Standard Functions}
+# This function will take the correctness and convert it to 1 if correct, 0 if incorrect
+computeCorrect <- function(c){
+  ifelse(c < 8, 1.0, 0.0)
+}
+
+# This function will give the standard error of a vector
+standardE <- function(c) sd(c)/sqrt(length(c))
+```
+
+# Load and clean data
+Loads csv made from jupyter notebooks
+```{r}
+# load the data
+day1data = read.csv('~/Dropbox/Project/HSRdata/HSR/day1data_HSR.csv',header = T)
+day2WithinData = read.csv('~/Dropbox/Project/HSRdata/HSR/day2Withindata_HSR.csv',header = T)
+day2AcrossData = read.csv('~/Dropbox/Project/HSRdata/HSR/day2data_HSR.csv',header = T)
+day3data = read.csv('~/Dropbox/Project/HSRdata/HSR/day3data_HSR.csv',header = T)
+
+resp_color_three = c('#9e0142','#d53e4f','#01665e')
+colorsbehav <- c('#f1aaa6','#93003a') # '#d08c88', '#f4777f' '#f1aaa6'
+withincolor = '#93003a'
+acrosscolor = '#f1aaa6'
+```
+
+## Exclude subjects and trials where subjects didn't navigate
+```{r}
+day1data <- day1data %>%
+  filter(!(subID == "HSR15"),!(subID == "HSR26"))
+day2WithinData <- day2WithinData %>%
+  filter(!(subID == "HSR15"),!(subID == "HSR26"))
+day2AcrossData <- day2AcrossData %>%
+  filter(!(subID == "HSR15"),!(subID == "HSR14"),!(subID == "HSR26"),!(subID == "HSR17"))
+day3data <- day3data %>%
+  filter(!(subID == "HSR15"),!(subID == "HSR14"),!(subID == "HSR26"),!(subID == "HSR17"))
+
+# remove any trials in which participants failed to navigate
+day1data <- day1data %>%
+  filter(pathDistance >= 8)
+day2WithinData <- day2WithinData %>%
+  filter(pathDistance >= 8)
+day2AcrossData <- day2AcrossData %>%
+  filter(pathDistance >= 8)
+day3data <- day3data %>%
+  filter(pathDistance >= 8)
+```
+
+## Add new columns for analyses we will do later
+```{r}
+# Add correct/inc, hubcat, goalcat, change subID to just number
+day1data <- day1data %>%
+  mutate(subID = str_replace(subID,"HSR",""))%>%
+  mutate(isCorrect= computeCorrect(goalError))%>%
+  mutate(geCat = ifelse(goalError <= 8, "correct", "incorrect")) %>%
+  mutate(hubCat = ifelse(goal_loc %in% c(3,5,6,8,11,13), "hub", "notHub"))%>%
+  mutate(goalCat = ifelse(goal_loc %in% c(3,5,6,8,11,13), "hub", ifelse(goal_loc %in% c(4,7,12), "inbetween", "withinComm"))) %>%
+  mutate(headingCat = ifelse(feedbackType == "correct", 1.0,0.0))
+day1data$geCat <- factor(day1data$geCat)
+day1data$hubCat <- factor(day1data$hubCat)
+day1data$goalCat <- factor(day1data$goalCat, levels = c("hub", "inbetween", "withinComm"))
+
+day2WithinData <- day2WithinData %>%
+  mutate(subID = str_replace(subID,"HSR",""))%>%
+  mutate(isCorrect= computeCorrect(goalError))%>%
+  mutate(geCat = ifelse(goalError <= 8, "correct", "incorrect"))%>%
+  mutate(hubCat = ifelse(goal_loc %in% c(3,5,6,8,11,13), "hub", "notHub"))%>%
+  mutate(goalCat = ifelse(goal_loc %in% c(3,5,6,8,11,13), "hub", ifelse(goal_loc %in% c(4,7,12), "inbetween", "withinComm")))%>%
+  mutate(headingCat = ifelse(feedbackType == "correct", 1.0,0.0))
+day2WithinData$geCat <- factor(day2WithinData$geCat)
+day2WithinData$hubCat <- factor(day2WithinData$hubCat)
+day2WithinData$goalCat <- factor(day2WithinData$goalCat, levels = c("hub", "inbetween", "withinComm"))
+
+day2AcrossData <- day2AcrossData %>%
+  mutate(subID = str_replace(subID,"HSR",""))%>%
+  mutate(isCorrect= computeCorrect(goalError))%>%
+  mutate(geCat = ifelse(goalError <= 8, "correct", "incorrect"))%>%
+  mutate(hubCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", "notHub"))%>%
+  mutate(goalCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", ifelse(goalID %in% c(4,7,12), "inbetween", "withinComm")))%>%
+  mutate(headingCat = ifelse(feedbackType == "correct", 1.0,0.0))
+day2AcrossData$geCat <- factor(day2AcrossData$geCat)
+day2AcrossData$hubCat <- factor(day2AcrossData$hubCat)
+day2AcrossData$goalCat <- factor(day2AcrossData$goalCat, levels = c("hub", "inbetween", "withinComm"))
+
+day3data <- day3data %>%
+  mutate(subID = str_replace(subID,"HSR",""))%>%
+  mutate(isCorrect= computeCorrect(goalError))%>%
+  mutate(geCat = ifelse(goalError <= 8, "correct", "incorrect"))%>%
+  mutate(hubCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", "notHub"))%>%
+  mutate(goalCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", ifelse(goalID %in% c(4,7,12), "inbetween", "withinComm")))%>%
+  mutate(headingCat = ifelse(feedbackType == "correct", 1.0,0.0))
+day3data$geCat <- factor(day3data$geCat)
+day3data$hubCat <- factor(day3data$hubCat)
+day3data$goalCat <- factor(day3data$goalCat, levels = c("hub", "inbetween", "withinComm"))
+
+# New feedback type 
+day1data$newFeedbackType <- NA
+day1data$newFeedbackType[day1data$goalError<=8 & day1data$shPathError<=8] <- "correctSP"
+day1data$newFeedbackType[day1data$goalError<=8 & day1data$shPathError>8] <- "correctNonSP"
+day1data$newFeedbackType[day1data$goalError>8] <- "incorrect"
+day1data$newFeedbackType <- factor(day1data$newFeedbackType, levels = c("correctSP", "correctNonSP", "incorrect"))
+
+day2WithinData$newFeedbackType <- NA
+day2WithinData$newFeedbackType[day2WithinData$goalError<=8 & day2WithinData$shPathError<=8] <- "correctSP"
+day2WithinData$newFeedbackType[day2WithinData$goalError<=8 & day2WithinData$shPathError>8] <- "correctNonSP"
+day2WithinData$newFeedbackType[day2WithinData$goalError>8] <- "incorrect"
+day2WithinData$newFeedbackType <- factor(day2WithinData$newFeedbackType, levels = c("correctSP", "correctNonSP", "incorrect"))
+
+day2AcrossData$newFeedbackType <- NA
+day2AcrossData$newFeedbackType[day2AcrossData$goalError<=8 & day2AcrossData$shPathError<=18] <- "correctSP"
+day2AcrossData$newFeedbackType[day2AcrossData$goalError<=8 & day2AcrossData$shPathError>18] <- "correctNonSP"
+day2AcrossData$newFeedbackType[day2AcrossData$goalError>8] <- "incorrect"
+day2AcrossData$newFeedbackType <- factor(day2AcrossData$newFeedbackType, levels = c("correctSP", "correctNonSP", "incorrect"))
+
+day3data$newFeedbackType <- NA
+day3data$newFeedbackType[day3data$goalError<=8 & day3data$shPathError<=18] <- "correctSP"
+day3data$newFeedbackType[day3data$goalError<=8 & day3data$shPathError>18] <- "correctNonSP"
+day3data$newFeedbackType[day3data$goalError>8] <- "incorrect"
+day3data$newFeedbackType <- factor(day3data$newFeedbackType, levels = c("correctSP", "correctNonSP", "incorrect"))
+```
+
+Shortest path length for that trial 
+```{r}
+# Add path length and shPathError columns, rel path ineff value
+day1data <- day1data %>%
+  mutate(shortestLen = pathDistance - shPathError) %>%
+  mutate(relPathIneff = ((pathDistance/shortestLen)-1))
+
+day2WithinData <- day2WithinData %>%
+  mutate(shortestLen = pathDistance - shPathError) %>%
+  mutate(relPathIneff = ((pathDistance/shortestLen)-1))
+
+day2AcrossData <- day2AcrossData %>%
+  mutate(shortestLen = pathDistance - shPathError) %>%
+  mutate(relPathIneff = ((pathDistance/shortestLen)-1))
+
+day3data <- day3data %>%
+  mutate(shortestLen = pathDistance - shPathError) %>%
+  mutate(relPathIneff = ((pathDistance/shortestLen)-1))
+
+#get rid of negatives
+day1data$relPathIneff[day1data$relPathIneff <= 0] <- 0
+day2WithinData$relPathIneff[day2WithinData$relPathIneff <= 0] <- 0
+day2AcrossData$relPathIneff[day2AcrossData$relPathIneff <= 0] <- 0
+day3data$relPathIneff[day3data$relPathIneff <= 0] <- 0
+
+# rel path ineff %
+day1data <- day1data %>%
+  mutate(percIneff = (relPathIneff*100))
+
+day2WithinData <- day2WithinData %>%
+  mutate(percIneff = (relPathIneff*100))
+
+day2AcrossData <- day2AcrossData %>%
+  mutate(percIneff = (relPathIneff*100))
+
+day3data <- day3data %>%
+  mutate(percIneff = (relPathIneff*100))
+```
+
+Factor data and create dfs for within/across, test trials
+```{r}
+# within vs across context trials for D2 D3
+day2acrossdata_actrials <- day2AcrossData %>% 
+  filter(trialTypeContext == "across")
+day2acrossdata_wctrials <- day2AcrossData %>%
+  filter(trialTypeContext == "within")
+day3data_actrials <- day3data %>% 
+  filter(trialTypeContext == "across")
+day3data_wctrials <- day3data %>% 
+  filter(trialTypeContext == "within")
+
+# test runs only 
+d1_test <- c("5","6","7","8","9","10")
+d1_train <- c("1","2","3","4")
+d2w_test <- c("3","4")
+d2a_test <- c("4","5","6","7","8","9","10","11","12")
+d2a_train <- c("1","2","3")
+d3_test <- c("3","4","5","6")
+
+day1data_test <- day1data %>%
+  filter(run %in% d1_test)
+day2withindata_test <- day2WithinData %>%
+  filter(run %in% d2w_test)
+day2acrossdata_test <- day2AcrossData %>%
+  filter(run %in% d2a_test)
+day3data_test <- day3data %>%
+  filter(run %in% d3_test)
+```
+
+## Percent correct for each day + figures for paper
+```{r}
+# Within context trials for all 4 tasks, by run
+day1data$run <- factor(day1data$run, levels = c("1","2","3", "4","5","6","7","8","9","10"))
+d1_perfXrun <- day1data %>% 
+  dplyr::group_by(run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+
+d1_perfXrunXsub <- day1data %>% 
+  dplyr::group_by(subID,run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+
+d2w_perfXrun <- day2WithinData %>% 
+  dplyr::group_by(run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+
+d2a_wctrials_perfXrun <- day2acrossdata_wctrials %>% 
+  dplyr::group_by(run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+
+d3_wctrials_perfXrun <- day3data_wctrials %>% 
+  dplyr::group_by(run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+
+#Across context trials, by run
+d2a_actrials_perfXrun <- day2acrossdata_actrials %>% 
+  dplyr::group_by(run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+
+d3_actrials_perfXrun <- day3data_actrials %>% 
+  dplyr::group_by(run) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+```
+
+```{r}
+# Within context nav d1
+withincolor = '#93003a'
+perccorrect_D1_plot = ggplot()+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="darkgray", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax = 4.5, ymin= -Inf, ymax=Inf))+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=4.5, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  #geom_boxplot(data = d1_perfXrunXsub, aes(x=run, y = proportion_correct,group=run), size = .5, alpha = 0.4, color = "black")+
+  geom_line(data = d1_perfXrun, aes(x=run, y = proportion_correct, group=1), size = 1, alpha = 0.8, color = withincolor)+
+  geom_point(data = d1_perfXrun, aes(x=run, y = proportion_correct,group=1), size = 1.5, alpha = 0.8, color = withincolor)+
+  geom_errorbar(data = d1_perfXrun, aes(ymin = proportion_correct-SE_correct, ymax = proportion_correct+SE_correct, x=run), color = withincolor, alpha =0.9, size=1, width=.05)+
+  scale_y_continuous(limits = c(75,100),breaks = c(75,80,85,90,95,100))+
+  #scale_y_continuous(limits = c(90,100),breaks = c(90,100), sec.axis = dup_axis(name = "% Correct"))+
+  scale_x_discrete(limits=c(1:10))+
+  labs(y= 'Correct Trials (%)', x = "",title = "")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.text.y = element_text(size=13),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size=16))
+perccorrect_D1_plot
+
+#within context nav d2w
+d2w_perf_testruns <- d2w_perfXrun %>%
+  filter(run %in% d2w_test)
+
+perccorrect_D2W_plot = ggplot(d2w_perf_testruns)+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  geom_line(aes(x=run, y = proportion_correct, group = 1), size = 1, alpha = 0.8, color = withincolor)+
+  geom_point(aes(x=run, y = proportion_correct, group = 1), size = 1.5, alpha = 0.8, color = withincolor)+
+  geom_errorbar(aes(ymin = proportion_correct-SE_correct, ymax = proportion_correct+SE_correct, x=run), color = withincolor, alpha =0.9, size=1, width=.05)+
+  scale_y_continuous(limits = c(75,100),breaks = c(75,80,85,90,95,100))+
+  scale_x_discrete(limits=c(3,4), labels=c("13","14"))+
+  theme_classic()+
+  labs(y= "", x = "", title = "")+
+  theme(plot.margin=unit(c(1,1,0,.5), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.line.y = element_blank())
+perccorrect_D2W_plot
+```
+
+put all within context nav on 1 plot
+```{r}
+g1 <- ggplotGrob(perccorrect_D1_plot)
+g2 <- ggplotGrob(perccorrect_D2W_plot)
+plots_within = list(g1, g2)
+title2 = textGrob("Run",gp=gpar(fontsize=16))
+pc_W = grid.arrange(grobs=plots_within,ncol=2,widths=unit(c(10,2.5),"null"), bottom = title2)
+pc_W
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/percentcorrect_WC_D1D2.png', pc_W, dpi=600, height = 5, width = 8)
+```
+
+Stats: Local Nav Task
+```{r}
+print("D1 performance > chance")
+day1data_test_sub <- day1data_test %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+mean(day1data_test_sub$proportion_correct) # mean d1 test PE
+standardE(day1data_test_sub$proportion_correct)
+t.test(day1data_test_sub$proportion_correct, mu = 0.25, alternative = "g") # d1 mean > chance
+
+# lm to make sure no difference between runs
+print("Model: no effect of run on d1 test")
+d1Xrun = lm(data = day1data_test, isCorrect~run)
+summary(d1Xrun)
+
+print("Day 2 within performance > chance")
+day2withindata_test_sub <- day2withindata_test %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+mean(day2withindata_test_sub$proportion_correct)
+standardE(day2withindata_test_sub$proportion_correct)
+t.test(day2withindata_test_sub$proportion_correct, mu = 0.25, alternative = "g") # d2 within mean > chance
+
+# day 1 vs day 2 
+day1data_test_sub$day <- "day1"
+day2withindata_test_sub$day <- "day2"
+withincon_test <- rbind(day1data_test_sub,day2withindata_test_sub)
+t.test(day2withindata_test_sub$proportion_correct,day1data_test_sub$proportion_correct, paired = TRUE)
+
+# day 1 vs day 2 
+print("Day 2 vs Day 1 last run")
+d1_last_run <- d1_perfXrunXsub %>%
+  filter(run == "10")
+d1_last_run$day <- "day1"
+t.test(day2withindata_test_sub$proportion_correct,d1_last_run$proportion_correct, paired = TRUE)
+```
+
+cohens d: 
+SD is roughly approximate to sqrt(N)*SEM. SEM is really small, like negligable. 
+Effect size calculations here:
+```{r}
+82.831/sqrt(23)
+```
+
+D2 and D3, two separate lines for within and across context trials 
+```{r}
+colorsbehav <- c('#f1aaa6','#93003a') #'#a21a45'
+
+d2_alltrials_perfXrun <- day2AcrossData %>% 
+  dplyr::group_by(run,trialTypeContext) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100)
+
+perccorrect_D2_plot2 = ggplot(d2_alltrials_perfXrun)+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="darkgray", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax = 3.5, ymin= -Inf, ymax=Inf))+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=3.5, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  geom_line(aes(x=run, y = proportion_correct, group=trialTypeContext, color=trialTypeContext), size = 1, alpha = 0.8)+
+  geom_point(aes(x=run, y = proportion_correct,group=trialTypeContext, color=trialTypeContext), size = 1.5, alpha = 0.8, position = position_dodge(0.13))+
+  geom_errorbar(aes(ymin = proportion_correct-SE_correct, ymax = proportion_correct+SE_correct, x=run,group=trialTypeContext, color=trialTypeContext), alpha =0.9, size=1, width=.15,position = position_dodge(0.13))+
+  scale_y_continuous(limits = c(75,100),breaks = c(75,80,85,90,95,100))+
+  #scale_y_continuous(limits = c(90,100),breaks = c(90,95,100), position = "right")+
+  scale_x_discrete(limits=c(1:12))+
+  scale_fill_manual(values = colorsbehav)+
+  scale_color_manual(values = colorsbehav)+
+  labs(y= 'Correct Trials (%)', x = "",title = "")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.text.y = element_text(size=13),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size=16),
+        legend.position = "None")
+perccorrect_D2_plot2
+
+d3_alltrials_perfXrun <- day3data %>% 
+  dplyr::group_by(run,trialTypeContext) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect)*100, SD_correct = sd(isCorrect)*100, SE_correct = standardE(isCorrect)*100) %>%
+  dplyr::filter(run %in% d3_test)
+
+perccorrect_D3_plot = ggplot(d3_alltrials_perfXrun)+
+  geom_line(aes(x=run, y = proportion_correct, group=trialTypeContext, color=trialTypeContext), size = 1, alpha = 0.8)+
+  geom_point(aes(x=run, y = proportion_correct,group=trialTypeContext, color=trialTypeContext), size = 1.5, alpha = 0.8, position = position_dodge(0.13))+
+  geom_errorbar(aes(ymin = proportion_correct-SE_correct, ymax = proportion_correct+SE_correct, x=run,group=trialTypeContext, color=trialTypeContext), alpha =0.9, size=1, width=.15,position = position_dodge(0.13))+
+  scale_y_continuous(limits = c(75,100),breaks = c(75,80,85,90,95,100))+
+  scale_x_discrete(limits=c(3,4,5,6),labels=c("13","14","15","16"))+
+  scale_fill_manual(values = colorsbehav, labels=c("Across Tracks", "Within Track"))+
+  scale_color_manual(values = colorsbehav,labels=c("Across Tracks", "Within Track"))+
+  labs(y= '', x = "",title = "",color= "Navigation Trial Type")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        legend.text=element_text(size=14),
+        legend.title=element_text(size=14),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.line.y = element_blank())
+perccorrect_D3_plot
+```
+
+```{r}
+g3 <- ggplotGrob(perccorrect_D2_plot2)
+g4 <- ggplotGrob(perccorrect_D3_plot)
+plots_across = list(g3, g4)
+title2 = textGrob("Run",gp=gpar(fontsize=16))
+pc_A = grid.arrange(grobs=plots_across,ncol=2,widths=unit(c(10,8),"null"), bottom = title2)
+pc_A
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/percentcorrect_AC_D2D3.png', pc_A, dpi=600, height = 5, width = 9)
+```
+
+stats - Global Nav Task
+```{r}
+# group by sub but collapse across trial types
+d2_alltrials_perfXsub <- day2AcrossData %>% 
+  dplyr::filter(run %in% d2a_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+print("all d2 trials mean SEM")
+mean(d2_alltrials_perfXsub$proportion_correct)
+standardE(d2_alltrials_perfXsub$proportion_correct)
+# test against chance
+t.test(d2_alltrials_perfXsub$proportion_correct, mu = 0.07, alternative = "g")
+
+# also group by trial type to compare within vs across path trials
+d2_alltrials_perfXsubXtrial <- day2AcrossData %>% 
+  dplyr::filter(run %in% d2a_test) %>%
+  dplyr::group_by(subID,trialTypeContext) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+t.test(proportion_correct ~ trialTypeContext, data = d2_alltrials_perfXsubXtrial, paired = TRUE)
+
+# test for diff between D2 local and D2 global 
+print("D2 Local vs D2 Global accuracy")
+day2withindata_test_21sub <-day2withindata_test_sub %>%
+  dplyr::filter(subID != "14", subID != "17")
+t.test(d2_alltrials_perfXsub$proportion_correct,day2withindata_test_21sub$proportion_correct, paired=TRUE)
+
+# compare Global Day 2 correct with Local Day 1 correct
+day1data_test_21sub <- day1data_test_sub %>%
+  dplyr::filter(subID != "14", subID != "17")
+t.test(d2_alltrials_perfXsub$proportion_correct,day1data_test_21sub$proportion_correct, paired=TRUE)
+
+print("d2 within trials mean SEM")
+d2_within_perfXsubXtrial <- d2_alltrials_perfXsubXtrial %>%
+  dplyr::filter(trialTypeContext == "within")
+mean(d2_within_perfXsubXtrial$proportion_correct)
+standardE(d2_within_perfXsubXtrial$proportion_correct)
+print("differ from chance?")
+t.test(d2_within_perfXsubXtrial$proportion_correct, mu = 0.07, alternative = "g")
+
+print("d2 across trials mean SEM")
+d2_across_perfXsubXtrial <- d2_alltrials_perfXsubXtrial %>%
+  dplyr::filter(trialTypeContext == "across")
+mean(d2_across_perfXsubXtrial$proportion_correct)
+standardE(d2_across_perfXsubXtrial$proportion_correct)
+print("differ from chance?")
+t.test(d2_across_perfXsubXtrial$proportion_correct, mu = 0.07, alternative = "g")
+
+# does D2 within accuracy decline over runs? 
+print("model D2 within accuracy")
+d2a_wctrials_test <- day2AcrossData %>%
+  dplyr::filter(trialTypeContext == "within", run %in% d2a_test,subID != "14", subID != "17")
+d2a_wcXrun <- lm(data = d2a_wctrials_test,isCorrect~run)
+summary(d2a_wcXrun)
+
+# does D2 across accuracy increase over runs? 
+print("model D2 across accuracy")
+d2a_actrials_test <- day2AcrossData %>%
+  dplyr::filter(trialTypeContext == "across", run %in% d2a_test,subID != "14", subID != "17")
+d2a_acXrun <- lm(data = d2a_actrials_test,isCorrect~run)
+summary(d2a_acXrun)
+
+#within vs across trials at end of D2a task 
+print("within vs across final run of D2a")
+d2_wc_subXlastrun <- day2AcrossData %>% 
+  dplyr::filter(trialTypeContext == "within",run == "10") %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+d2_ac_subXlastrun <- day2AcrossData %>% 
+  dplyr::filter(trialTypeContext == "across",run == "10") %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect))
+t.test(d2_wc_subXlastrun$proportion_correct, d2_ac_subXlastrun$proportion_correct, paired = TRUE)
+
+## Day 3
+# group by sub but collapse across trial types
+d3_alltrials_perfXsub <- day3data %>% 
+  dplyr::filter(run %in% d3_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect)) 
+print("d3 all trials mean SEM")
+mean(d3_alltrials_perfXsub$proportion_correct)
+standardE(d3_alltrials_perfXsub$proportion_correct)
+# test against chance
+t.test(d3_alltrials_perfXsub$proportion_correct, mu = 0.07, alternative = "g")
+
+# also group by trial type to compare within vs across path trials
+print("d3 within vs across trials differences?")
+d3_alltrials_perfXsubXtrial <- day3data %>% 
+  dplyr::filter(run %in% d3_test) %>%
+  dplyr::group_by(subID,trialTypeContext) %>%
+  dplyr::summarize(proportion_correct = mean(isCorrect), SD_correct = sd(isCorrect), SE_correct = standardE(isCorrect)) 
+t.test(proportion_correct ~ trialTypeContext, data = d3_alltrials_perfXsubXtrial, paired = TRUE)
+
+print("d3 within trials mean SEM")
+d3_within_perfXsubXtrial <- d3_alltrials_perfXsubXtrial %>%
+  dplyr::filter(trialTypeContext == "within")
+mean(d3_within_perfXsubXtrial$proportion_correct)
+standardE(d3_within_perfXsubXtrial$proportion_correct)
+print("d3 within trials mean SEM")
+d3_across_perfXsubXtrial <- d3_alltrials_perfXsubXtrial %>%
+  dplyr::filter(trialTypeContext == "across")
+mean(d3_across_perfXsubXtrial$proportion_correct)
+standardE(d3_across_perfXsubXtrial$proportion_correct)
+
+# t tests comparing D2 and D3
+t.test(d3_within_perfXsubXtrial$proportion_correct,d2_wc_subXlastrun$proportion_correct, paired=TRUE)
+t.test(d3_across_perfXsubXtrial$proportion_correct,d2_ac_subXlastrun$proportion_correct, paired=TRUE)
+```
+Effect sizes
+```{r}
+-3.3959/sqrt(21)
+27.029/sqrt(21)
+23.6/sqrt(21)
+2.4246/sqrt(21)
+2.8414/sqrt(21)
+4.0727/sqrt(21)
+```
+
+## Path efficiency figures for paper
+```{r}
+# Within context trials for all 4 tasks, by subj/run and by run
+d1_effiencyXsubXrun <- day1data %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(subID,run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d1_effiencyXsub <- day1data %>% 
+  dplyr::filter(isCorrect == "1", run %in% d1_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d1_effiencyXrun <- day1data %>%
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+#
+d2w_effiencyXsubXrun <- day2WithinData %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(subID, run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d2w_effiencyXsub<- day2WithinData %>% 
+  dplyr::filter(isCorrect == "1",run %in% d2w_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d2w_effiencyXrun <- day2WithinData %>%
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+#
+d2a_wctrials_effiencyXsubXrun <- day2acrossdata_wctrials %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(subID,run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d2a_wctrials_effiencyXsub <- day2acrossdata_wctrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d2a_wctrials_effiencyXrun <- day2acrossdata_wctrials %>%
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+#
+d3_wctrials_effiencyXsubXrun <- day3data_wctrials %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(subID,run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d3_wctrials_effiencyXsub <- day3data_wctrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d3_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d3_wctrials_effiencyXrun <- day3data_wctrials %>%
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+# Across context trials, by sub/run and by run
+d2a_actrials_effiencyXsubXrun <- day2acrossdata_actrials %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(subID,run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d2a_actrials_effiencyXsub <- day2acrossdata_actrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d2a_actrials_effiencyXrun <- day2acrossdata_actrials %>%
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+#
+d3_actrials_effiencyXsubXrun <- day3data_actrials %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(subID,run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d3_actrials_effiencyXsub <- day3data_actrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d3_test) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+d3_actrials_effiencyXrun <- day3data_actrials %>%
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+```
+
+### Within context navigation trials, within context navigation
+Relative path inefficiency by run, collapsed across all three paths 
+```{r}
+D1_pe_run_plot_mean <- ggplot()+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="darkgray", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax = 4.5, ymin= -Inf, ymax=Inf))+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=4.5, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  #geom_jitter(data = d1_effiencyXsubXrun, aes(y=efficiency, x=run, group = run),  size = .5, alpha = 0.4, color = "black", width=0.1)+
+  geom_line(data = d1_effiencyXrun, aes(y=efficiency, x=run, group=1),size = 1.5, alpha = 0.8,color=withincolor)+
+  geom_errorbar(data = d1_effiencyXrun, aes(ymin = efficiency-SE_efficiency, ymax = efficiency+SE_efficiency, x=run), color = withincolor,  alpha =0.9, size=1, width=.05)+
+  geom_point(data = d1_effiencyXrun, aes(y=efficiency, x=run), color= withincolor, size = 1)+
+  scale_y_continuous(limits = c(-2,105),breaks = c(0,20,40,60,80,100))+
+  scale_x_discrete(limits=c(1:10))+
+  labs(y= 'Path Inefficiency (%)',x = "",title = "")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.text.y = element_text(size=13),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size=16))
+D1_pe_run_plot_mean
+
+d2w_effiencyXrun_testruns <- d2w_effiencyXrun %>%
+  filter(run %in% d2w_test)
+d2w_effiencyXsubXrun_testruns <- d2w_effiencyXsubXrun %>%
+  filter(run %in% d2w_test)
+
+D2w_pe_run_plot_mean <- ggplot()+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  #geom_jitter(data = d2w_effiencyXsubXrun_testruns, aes(y=efficiency, x=run, group = run),  size = .5, alpha = 0.4, color = "black", width=0.1)+
+  geom_line(data = d2w_effiencyXrun_testruns, aes(y=efficiency, x=run, group=1),size = 1.5, alpha = 0.8,color=withincolor)+
+  geom_errorbar(data = d2w_effiencyXrun_testruns, aes(ymin = efficiency-SE_efficiency, ymax = efficiency+SE_efficiency, x=run), color = withincolor,  alpha =0.9, size=1, width=.05)+
+  geom_point(data = d2w_effiencyXrun_testruns, aes(y=efficiency, x=run), color= withincolor, size = 1)+
+  scale_y_continuous(limits = c(-2,105),breaks = c(0,20,40,60,80,100))+
+  scale_x_discrete(limits=c(3:4), labels=c("13","14"))+
+  labs(y= '',x = "",title = "")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.line.y = element_blank())
+D2w_pe_run_plot_mean
+```
+
+put all within context on 1 plot
+```{r}
+p1 <- ggplotGrob(D1_pe_run_plot_mean)
+p2 <- ggplotGrob(D2w_pe_run_plot_mean)
+plots = list(p1, p2)
+title2 = textGrob("Run",gp=gpar(fontsize=16))
+pe_W = grid.arrange(grobs=plots,ncol=2,widths=unit(c(10,2.5),"null"), bottom = title2)
+pe_W
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/efficiency_WC_D1D2_avg.png', pe_W, dpi=600, height = 5, width = 8)
+```
+Local Navigation Stats
+```{r}
+# mean and SEM for local task D1
+mean(d1_effiencyXsub$efficiency)
+standardE(d1_effiencyXsub$efficiency)
+# mean and SEM for local task D2
+mean(d2w_effiencyXsub$efficiency)
+standardE(d2w_effiencyXsub$efficiency)
+# t test d1 vs d2 
+t.test(d2w_effiencyXsub$efficiency, d1_effiencyXsub$efficiency, paired = TRUE)
+
+print("t test against chance estimate")
+# t test against conservative estimate of chance (25%)
+t.test(d1_effiencyXsub$efficiency, mu = 25, alternative = "l")
+
+print("D1 run 1 vs run 5")
+# performance on first train run vs first test run
+d1_r1 <- d1_effiencyXsubXrun %>%
+  dplyr::filter(run == "1") 
+d1_r5 <- d1_effiencyXsubXrun %>%
+  dplyr::filter(run == "5")
+t.test(d1_r1$efficiency,d1_r5$efficiency, paired = TRUE)
+
+print("last run of D1 vs D2")
+# performance on D2 vs last run of D1
+d1_last_run_pe <- day1data_test %>%
+  dplyr::filter(isCorrect == "1", run == "10") %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+t.test(d2w_effiencyXsub$efficiency,d1_last_run_pe$efficiency, paired = TRUE)
+
+print("lm for training runs, perf improves")
+# lm to see improvement on training runs 
+d1_train_corr <- day1data %>%
+  dplyr::filter(isCorrect == "1", run %in% d1_train)
+d1_train_corr$run <- as.numeric(d1_train_corr$run)
+d1trainXrun = lm(data = d1_train_corr, percIneff~run)
+summary(d1trainXrun)
+
+print("lm for test runs, no effect of run")
+# lm to make sure no difference between runs on D1
+d1_test_corr <- day1data_test %>%
+  dplyr::filter(isCorrect == "1") 
+d1Xrun = lm(data = d1_test_corr, percIneff~run)
+summary(d1Xrun)
+```
+Effect sizes
+```{r}
+-8.7186/sqrt(23)
+4.2717/sqrt(23)
+-7.125/sqrt(23)
+```
+Global Nav Task Stats
+```{r}
+# look at training trials. Diff between pe on across vs within?
+print("training trials: within track mean SEM")
+d2a_wctrials_trainXsub <- day2acrossdata_wctrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_train) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+mean(d2a_wctrials_trainXsub$efficiency)
+standardE(d2a_wctrials_trainXsub$efficiency)
+
+print("training trials: across track mean SEM")
+d2a_actrials_trainXsub <- day2acrossdata_actrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_train) %>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+mean(d2a_actrials_trainXsub$efficiency)
+standardE(d2a_actrials_trainXsub$efficiency)
+
+print("training trials: within vs across track")
+t.test(d2a_actrials_trainXsub$efficiency,d2a_wctrials_trainXsub$efficiency,paired=TRUE)
+
+# global task D2 
+mean(d2a_wctrials_effiencyXsub$efficiency)
+standardE(d2a_wctrials_effiencyXsub$efficiency)
+mean(d2a_actrials_effiencyXsub$efficiency)
+standardE(d2a_actrials_effiencyXsub$efficiency)
+# t test within vs across trials on D2 
+print("D2 test, within vs across trials")
+t.test(d2a_actrials_effiencyXsub$efficiency, d2a_wctrials_effiencyXsub$efficiency, paired = TRUE)
+
+# performance improving on within trials over D2 test runs
+print("model showing perf improving over D2 test, within trials")
+d2a_wctrials_test <- day2acrossdata_wctrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_test)
+d2a_wcXrun = lm(data = d2a_wctrials_test, percIneff~run)
+summary(d2a_wcXrun)
+
+# performance improving on across trials over D2 test runs
+print("model showing perf improving over D2 test, across trials")
+d2a_actrials_test <- day2acrossdata_actrials %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_test)
+d2a_acXrun = lm(data = d2a_actrials_test, percIneff~run)
+summary(d2a_acXrun)
+
+# within vs across trials on last run of D2
+print("within vs across on last run of D2")
+d2a_wc_lastrun <- d2a_wctrials_effiencyXsubXrun %>%
+  dplyr::filter(run == "12")
+d2a_ac_lastrun <- d2a_actrials_effiencyXsubXrun %>%
+  dplyr::filter(run == "12")
+t.test(d2a_ac_lastrun$efficiency, d2a_wc_lastrun$efficiency, paired = TRUE)
+
+# performance compared to D1
+d1_effiencyX21sub <- d1_effiencyXsub %>%
+  dplyr::filter(subID != "14", subID != "17")
+t.test(d1_effiencyX21sub$efficiency, d2a_wctrials_effiencyXsub$efficiency, paired = TRUE)
+
+# d2 vs d3
+print("overnight improvement for across trials D2-D3")
+t.test(d3_actrials_effiencyXsub$efficiency,d2a_ac_lastrun$efficiency, paired = TRUE)
+print("mean SEM for across trials D3")
+mean(d3_actrials_effiencyXsub$efficiency)
+standardE(d3_actrials_effiencyXsub$efficiency)
+
+print("overnight improvement for within trials D2-D3")
+t.test(d3_wctrials_effiencyXsub$efficiency,d2a_ac_lastrun$efficiency, paired = TRUE)
+print("mean SEM for within trials D3")
+mean(d3_wctrials_effiencyXsub$efficiency)
+standardE(d3_wctrials_effiencyXsub$efficiency)
+
+print("diff between within and across trials on day 3")
+t.test(d3_actrials_effiencyXsub$efficiency,d3_wctrials_effiencyXsub$efficiency, paired = TRUE)
+```
+Effect sizes
+```{r}
+-2.244/sqrt(21)
+-3.163/sqrt(21)
+3.0428/sqrt(21)
+3.2154/sqrt(21)
+```
+
+characterizing the individual differences for the paper:
+```{r}
+max(d2a_actrials_effiencyXsub$efficiency)
+min(d2a_actrials_effiencyXsub$efficiency)
+IQR(d2a_actrials_effiencyXsub$efficiency)
+quantile(d2a_actrials_effiencyXsub$efficiency)
+```
+
+## Performance groups
+
+```{r}
+first4runs = c("4","5","6","7")
+means_for_subj_order <- day2acrossdata_actrials %>%
+  dplyr::filter(isCorrect == "1", run %in% first4runs)%>%
+  dplyr::group_by(subID) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff), medianEff = median(percIneff))
+
+order_by_mean <- c("18","28","12","03","22","32","20","21","08","06","19","09","16","10","29","05","25","31","02","33","13")
+order_by_median <- c("28","22","18","12","20","21","03","32","09","06","08","19","10","16","25","02","29","05","31","33","13")
+
+subID_labels <- c("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21")
+```
+
+```{r}
+# trialwise <- day2AcrossData %>%
+#   dplyr::filter(isCorrect == "1", run %in% first4runs)%>%
+#   dplyr::mutate(startlandmark = ifelse(startID == "1","1", ifelse(startID == "2","2", ifelse(startID == "3","3",ifelse(startID == "4","4", 
+#                                  ifelse(startID == "5","5", ifelse(startID == "6","5", ifelse(startID == "7","6", ifelse(startID == "8","7",
+#                                  ifelse(startID == "9","8", ifelse(startID == "10","9", ifelse(startID == "11","7", ifelse(startID == "12", "10",
+#                                  ifelse(startID == "13","3", ifelse(startID == "14","11", ifelse(startID == "15","12","ignore"))))))))))))))))
+# write.csv(trialwise,'~/Dropbox/Project/analysis/mixedmodels/HPC_PAPER/Finals_github/trialwiseanalysis.csv', row.names = FALSE)
+
+trialwisefr <- day2AcrossData %>%
+  dplyr::filter(isCorrect == "1", run %in% first4runs)%>%
+  dplyr::mutate(startfractal = ifelse(startID == "1","a", ifelse(startID == "2","b", ifelse(startID == "3","c",ifelse(startID == "4","d", 
+                                 ifelse(startID == "5","e", ifelse(startID == "6","f", ifelse(startID == "7","g", ifelse(startID == "8","h",
+                                 ifelse(startID == "9","i", ifelse(startID == "10","j", ifelse(startID == "11","k", ifelse(startID == "12", "l",
+                                 ifelse(startID == "13","m", ifelse(startID == "14","n", ifelse(startID == "15","o","ignore")))))))))))))))) %>%
+  dplyr::mutate(endfractal = ifelse(goalID == "1","a", ifelse(goalID == "2","b", ifelse(goalID == "3","c",ifelse(goalID == "4","d", 
+                                 ifelse(goalID == "5","e", ifelse(goalID == "6","f", ifelse(goalID == "7","g", ifelse(goalID == "8","h",
+                                 ifelse(goalID == "9","i", ifelse(goalID == "10","j", ifelse(goalID == "11","k", ifelse(goalID == "12", "l",
+                                 ifelse(goalID == "13","m", ifelse(goalID == "14","n", ifelse(goalID == "15","o","ignore"))))))))))))))))
+write.csv(trialwisefr,'~/Dropbox/Project/analysis/mixedmodels/HPC_PAPER/Finals_github/trialwiseanalysisfr.csv', row.names = FALSE)
+```
+
+```{r,fig.width=3, fig.height=2.5}
+# MEDIAN SPLIT
+moreefficient <- c("03","06","08","12","18","09","20","21","22","28","32") # list of more efficient ppl
+lessefficient <- c("02","05","19","10","13","16","25","29","31","33")  
+
+# take first 4 runs of D2 only and replot
+d2a_actrials_effiency_first4test_bp <- day2acrossdata_actrials %>%
+  dplyr::filter(isCorrect == "1", run %in% first4runs)  
+d2a_actrials_effiency_first4test_bp <- d2a_actrials_effiency_first4test_bp %>%
+  # mutate(d2_startruns_category = ifelse(subID %in% moreefficient, "More Efficient",
+  #                                       ifelse(subID %in% lessefficient,"Less Efficient","ignore")))  %>%
+  # filter(d2_startruns_category!="ignore")
+  mutate(d2_startruns_category = ifelse(subID %in% moreefficient, "More Efficient", "Less Efficient")) 
+d2a_actrials_effiency_first4test_bp$d2_startruns_category <- factor(d2a_actrials_effiency_first4test_bp$d2_startruns_category, levels=c("More Efficient", "Less Efficient"))
+d2a_actrials_effiency_first4test_bp$subID <- factor(d2a_actrials_effiency_first4test_bp$subID,levels=order_by_median, labels=subID_labels)
+
+scatter_first4 <- ggplot()+
+  geom_point(data = d2a_actrials_effiency_first4test_bp, aes(y=percIneff, x=subID, group = subID, color=d2_startruns_category),position =position_dodge(0.5), shape= "\u007c", size=3,alpha=0.7)+
+  theme_classic()+
+  labs(y= 'Path Inefficiency (%)',x = "Study Participant",title = "")+
+  theme(legend.position = "none",
+        axis.text.x = element_text(size=13),
+        axis.text.y = element_text(size=12),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size=16))+
+  coord_flip()
+scatter_first4
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/indsubs_first4_dists.png', scatter_first4, dpi=600)
+```
+`
+Plot just within first
+```{r}
+d2_withintrials_efficiencyXrun <- day2AcrossData %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run,trialTypeContext) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff)) %>% 
+  dplyr::filter(trialTypeContext == "within")
+
+efficiency_D2 = ggplot(d2_withintrials_efficiencyXrun)+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="darkgray", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax = 3.5, ymin= -Inf, ymax=Inf))+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=3.5, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  geom_line(aes(x=run, y = efficiency, group=trialTypeContext, color=withincolor), size = 1, alpha = 0.8)+
+  geom_point(aes(x=run, y = efficiency,group=trialTypeContext, color=withincolor), size = 1.5, alpha = 0.8, position = position_dodge(0.13))+
+  geom_errorbar(aes(ymin = efficiency-SE_efficiency, ymax = efficiency+SE_efficiency, x=run,group=trialTypeContext, color=withincolor), alpha =0.9, size=1, width=.01,position = position_dodge(0.13))+
+  scale_y_continuous(limits = c(-2,105),breaks = c(0,20,40,60,80,100))+
+  scale_x_discrete(limits=c(1:12))+
+  scale_color_manual(values = withincolor)+
+  labs(y= 'Path Inefficiency (%)',x = "",title = "Day 2")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=12),
+        axis.text.y = element_text(size=12),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size=14),
+        legend.position = "None")
+efficiency_D2
+
+d3_withintrials_efficiencyXrun <- day3data %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run,trialTypeContext) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff)) %>%
+  dplyr::filter(run %in% d3_test, trialTypeContext == "within")
+
+efficiency_D3 = ggplot(d3_withintrials_efficiencyXrun)+
+  geom_line(aes(x=run, y = efficiency, group=trialTypeContext, color=withincolor), size = 1, alpha = 0.8)+
+  geom_point(aes(x=run, y = efficiency,group=trialTypeContext, color=withincolor), size = 1.5, alpha = 0.8, position = position_dodge(0.13))+
+  geom_errorbar(aes(ymin = efficiency-SE_efficiency, ymax = efficiency+SE_efficiency, x=run,group=trialTypeContext, color=withincolor), alpha =0.9, size=1, width=.01,position = position_dodge(0.13))+
+  scale_y_continuous(limits = c(-2,105),breaks = c(0,20,40,60,80,100))+
+  scale_x_discrete(limits=c(3,4,5,6), labels=c("13","14","15","16"))+
+  scale_fill_manual(values = withincolor, labels=c("Within Track"))+
+  scale_color_manual(values = withincolor,labels=c("Within Track"))+
+  labs(y= '',x = "",title = "Day 3",color= "Navigation Trial Type")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.line.y = element_blank())
+efficiency_D3
+```
+
+```{r}
+p5w <- ggplotGrob(efficiency_D2)
+p6w <- ggplotGrob(efficiency_D3)
+plots_across = list(p5w, p6w)
+pe_Awc = grid.arrange(grobs=plots_across,ncol=2,widths=unit(c(8,6),"null"), bottom = title2)
+pe_Awc
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/efficiency_AC_D2D3_withinonly.png', pe_Awc, dpi=600, height = 5, width = 9)
+```
+
+
+```{r}
+d2a_wctest <- day2acrossdata_wctrials %>%
+  dplyr::filter(run %in% d2a_test, isCorrect == "1")
+d2a_wctest$day <- "day2"
+d2a_wctest$task <- "acrosscon"
+
+d3_wctest <- day3data_wctrials %>%
+  dplyr::filter(run %in% d3_test, isCorrect == "1")
+d3_wctest$day <- "day3"
+
+d2w_efficiency_test$task <- "withincon"
+d2a_wctest$maze <- NA
+d2w_efficiency_test$trialTypeContext <- NA
+d2w_efficiency_test$trialTypeNumCon <- NA
+d2w_efficiency_test$trialTypeEdgeLen <- NA
+d2w_efficiency_test$startID <- NA
+d2w_efficiency_test$goalID<- NA
+d2a_wctest$start_loc<- NA
+d2a_wctest$goal_loc<- NA
+d3_wctest$maze <- NA
+d3_wctest$start_loc<- NA
+d3_wctest$goal_loc<- NA
+d3_wctest$task <- "acrosscon"
+
+D2A_D2W_efficiency <- rbind(d2w_efficiency_test,d2a_wctest) 
+
+d2a_d3_wc_efficiency <- rbind(d2a_wctest,d3_wctest)
+
+# model for difference btw d2w and d2a
+lm.d2wa <- lmer(percIneff~task+(1|run), data = D2A_D2W_efficiency, control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(lm.d2wa)
+
+# model for difference btw d2a and d3 
+lm.eff2 <- lmer(percIneff~day+(1|run), data = d2a_d3_wc_efficiency, control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(lm.eff2)
+
+mean(d3_wctest$percIneff)
+```
+
+
+Plot within and across on the same plot
+```{r}
+d2_alltrials_efficiencyXrun <- day2AcrossData %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run,trialTypeContext) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff))
+
+efficiency_D2 = ggplot(d2_alltrials_efficiencyXrun)+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="darkgray", color = NA, alpha = 0.4, data.frame(xmin=-Inf, xmax = 3.5, ymin= -Inf, ymax=Inf))+
+  geom_rect(aes_all(vars = c('xmin','xmax','ymin','ymax')),fill="white", color = NA, alpha = 0.4, data.frame(xmin=3.5, xmax =Inf, ymin= -Inf, ymax=Inf))+
+  geom_line(aes(x=run, y = efficiency, group=trialTypeContext, color=trialTypeContext), size = 1, alpha = 0.8)+
+  geom_point(aes(x=run, y = efficiency,group=trialTypeContext, color=trialTypeContext), size = 1.5, alpha = 0.8, position = position_dodge(0.13))+
+  geom_errorbar(aes(ymin = efficiency-SE_efficiency, ymax = efficiency+SE_efficiency, x=run,group=trialTypeContext, color=trialTypeContext), alpha =0.9, size=1, width=.15,position = position_dodge(0.13))+
+  scale_y_continuous(limits = c(-2,105),breaks = c(0,20,40,60,80,100))+
+  scale_x_discrete(limits=c(1:12))+
+  scale_fill_manual(values = colorsbehav)+
+  scale_color_manual(values = colorsbehav)+
+  labs(y= 'Path Inefficiency (%)',x = "",title = "")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        axis.text.y = element_text(size=13),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size=16),
+        legend.position = "None")
+efficiency_D2
+
+d3_alltrials_efficiencyXrun <- day3data %>% 
+  dplyr::filter(isCorrect == "1") %>%
+  dplyr::group_by(run,trialTypeContext) %>%
+  dplyr::summarise(efficiency = mean(percIneff), sd_efficiency = sd(percIneff), SE_efficiency = standardE(percIneff)) %>%
+  dplyr::filter(run %in% d3_test)
+
+efficiency_D3 = ggplot(d3_alltrials_efficiencyXrun)+
+  geom_line(aes(x=run, y = efficiency, group=trialTypeContext, color=trialTypeContext), size = 1, alpha = 0.8)+
+  geom_point(aes(x=run, y = efficiency,group=trialTypeContext, color=trialTypeContext), size = 1.5, alpha = 0.8, position = position_dodge(0.13))+
+  geom_errorbar(aes(ymin = efficiency-SE_efficiency, ymax = efficiency+SE_efficiency, x=run,group=trialTypeContext, color=trialTypeContext), alpha =0.9, size=1, width=.15,position = position_dodge(0.13))+
+  scale_y_continuous(limits = c(-2,105),breaks = c(0,20,40,60,80,100))+
+  scale_x_discrete(limits=c(3,4,5,6), labels=c("13","14","15","16"))+
+  scale_fill_manual(values = colorsbehav, labels=c("Across Tracks", "Within Track"))+
+  scale_color_manual(values = colorsbehav,labels=c("Across Tracks", "Within Track"))+
+  labs(y= '',x = "",title = "",color= "Navigation Trial Type")+
+  theme_classic() +
+  theme(plot.margin=unit(c(1,0,0,1), "lines"),
+        axis.text.x = element_text(size=13),
+        legend.title = element_text(size=14),
+        legend.text = element_text(size=14),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.line.y = element_blank())
+efficiency_D3
+```
+
+
+```{r}
+p5 <- ggplotGrob(efficiency_D2)
+p6 <- ggplotGrob(efficiency_D3)
+plots_across = list(p5, p6)
+pe_A = grid.arrange(grobs=plots_across,ncol=2,widths=unit(c(10,8),"null"), bottom = title2)
+pe_A
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/efficiency_AC_D2D3.png', pe_A, dpi=600, height = 5, width = 9)
+```
+Stats
+```{r}
+# d2a: differ by trial type? 
+d2_alltrials_efficiency <- day2AcrossData %>% 
+  dplyr::filter(isCorrect == "1", run %in% d2a_test)
+lm.d2a<- lmer(percIneff~trialTypeContext+(1|run),data = d2_alltrials_efficiency, control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(lm.d2a)
+
+# d3: differ by trial type? 
+d3_alltrials_efficiency <- day3data %>% 
+  dplyr::filter(isCorrect == "1", run %in% d3_test) 
+lm.d3<- lmer(percIneff~trialTypeContext+(1|run),data = d3_alltrials_efficiency, control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(lm.d3)
+
+# difference in d2a vs d3 across trials
+d2a_actest <- day2acrossdata_actrials %>%
+  dplyr::filter(run %in% d2a_test, isCorrect == "1")
+d2a_actest$day <- "day2"
+
+d3_actest <- day3data_actrials %>%
+  dplyr::filter(run %in% d3_test, isCorrect == "1")
+d3_actest$day <- "day3"
+
+d2a_d3_ac_efficiency <- rbind(d2a_actest,d3_actest)
+
+# model for difference btw d2a and d3 across trials
+lm.eff3 <- lmer(percIneff~day+(1|run), data = d2a_d3_ac_efficiency, control = lmerControl(optimizer = "bobyqa",calc.derivs=FALSE))
+summary(lm.eff3)
+
+mean(d3_actest$percIneff)
+```
+
+Combine D2 and D3 ind subj
+```{r}
+d2_actrials_toadd <- d2a_actrials_effiencyXsubXrun
+d2_actrials_toadd$run <- as.character(d2_actrials_toadd$run)
+
+d3_actrials_toadd <- d3_actrials_effiencyXsubXrun%>%
+  filter(run %in% d3_test) %>%
+  mutate(run = str_replace(run,"3","13"))%>%
+  mutate(run = str_replace(run,"4","14"))%>%
+  mutate(run = str_replace(run,"5","15"))%>%
+  mutate(run = str_replace(run,"6","16"))
+
+pe_by_sub_run_across <- rbind(d2_actrials_toadd, d3_actrials_toadd)
+pe_by_sub_run_across %>% group_by(subID,run)
+```

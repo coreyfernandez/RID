@@ -1,0 +1,264 @@
+---
+title: "Trialwise_Behavioral_Analyses_Paper"
+output:
+  html_document:
+    code_folding: hide
+    highlight: pygments
+    theme: flatly
+    toc: yes
+  html_notebook:
+    toc: yes
+    code_folding: hide
+---
+# This notebook conducts the trialwise brain-behavior analyses for Representational integration and differentiation in the human hippocampus following goal directed navigation by Fernandez et al., 2023
+
+##Load Packages 
+```{r load necessary packages and dataframe, warning=FALSE, message =FALSE}
+library(stringr)
+library(ggplot2)
+require(gridExtra)
+library(grid)
+library(lattice)
+require(gtable)
+library(lme4)
+require(lmerTest)
+library(ez)
+library(effects)
+library(rlang)
+library(scales)
+library(tidyverse)
+library(emmeans)
+library(languageR)
+library(performance)
+library(reshape)
+library(car)
+library(dplyr)
+library(gganimate)
+library(ggridges)
+library(Rmisc)
+library(sjPlot)
+library(reshape2)
+```
+
+### Standard Functions
+```{r Standard Functions}
+# This function will take the correctness and convert it to 1 if correct, 0 if incorrect
+computeCorrect <- function(c){
+  ifelse(c < 8, 1.0, 0.0)
+}
+
+# This function will give the standard error of a vector
+standardE <- function(c) sd(c)/sqrt(length(c))
+```
+
+# Load and clean data
+Loads csv made from jupyter notebooks
+```{r}
+# load the data
+day2data = read.csv('~/Dropbox/Project/analysis/behavior/day2data_trialwise.csv',header = T)
+day3data = read.csv('~/Dropbox/Project/analysis/behavior/day3data_trialwise.csv',header = T)
+
+resp_color_three = c('#9e0142','#d53e4f','#01665e')
+colorsbehav <- c('#f1aaa6','#93003a') # '#d08c88', '#f4777f' '#f1aaa6'
+withincolor = '#93003a'
+acrosscolor = '#f1aaa6'
+
+day2start <- c('4','5','6','7')
+day2end <- c('11','12')
+day3end <- c('5','6')
+```
+
+## Exclude trials where subjects didn't navigate
+```{r}
+# remove any trials in which participants failed to navigate
+day2data <- day2data %>%
+  filter(pathDistance >= 8)
+day3data <- day3data %>%
+  filter(pathDistance >= 8)
+```
+
+## Add new columns for analyses we will do later
+```{r}
+# Add correct/inc, hubcat, goalcat, change subID to just number
+day2data <- day2data %>%
+  mutate(subID = str_replace(subID,"HSR",""))%>%
+  mutate(isCorrect= computeCorrect(goalError))%>%
+  mutate(geCat = ifelse(goalError <= 8, "correct", "incorrect")) %>%
+  mutate(hubCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", "notHub"))%>%
+  mutate(goalCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", ifelse(goalID %in% c(4,7,12), "inbetween", "withinComm"))) %>%
+  mutate(headingCat = ifelse(feedbackType == "correct", 1.0,0.0))
+day2data$geCat <- factor(day2data$geCat)
+day2data$hubCat <- factor(day2data$hubCat)
+day2data$goalCat <- factor(day2data$goalCat, levels = c("hub", "inbetween", "withinComm"))
+
+day3data <- day3data %>%
+  mutate(subID = str_replace(X1,"HSR",""))%>%
+  mutate(isCorrect= computeCorrect(goalError))%>%
+  mutate(geCat = ifelse(goalError <= 8, "correct", "incorrect"))%>%
+  mutate(hubCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", "notHub"))%>%
+  mutate(goalCat = ifelse(goalID %in% c(3,5,6,8,11,13), "hub", ifelse(goalID %in% c(4,7,12), "inbetween", "withinComm")))%>%
+  mutate(headingCat = ifelse(feedbackType == "correct", 1.0,0.0))
+day3data$geCat <- factor(day3data$geCat)
+day3data$hubCat <- factor(day3data$hubCat)
+day3data$goalCat <- factor(day3data$goalCat, levels = c("hub", "inbetween", "withinComm"))
+```
+
+Shortest path length for that trial 
+```{r}
+# Add path length and shPathError columns, rel path ineff value
+day2data <- day2data %>%
+  mutate(shortestLen = pathDistance - shPathError) %>%
+  mutate(relPathIneff = ((pathDistance/shortestLen)-1))
+
+day3data <- day3data %>%
+  mutate(shortestLen = pathDistance - shPathError) %>%
+  mutate(relPathIneff = ((pathDistance/shortestLen)-1))
+
+#get rid of negatives
+day2data$relPathIneff[day2data$relPathIneff <= 0] <- 0
+day3data$relPathIneff[day3data$relPathIneff <= 0] <- 0
+
+# rel path ineff %
+day2data <- day2data %>%
+  mutate(percIneff = (relPathIneff*100))
+
+day3data <- day3data %>%
+  mutate(percIneff = (relPathIneff*100))
+```
+
+Factor data and create dfs for within/across, test trials
+```{r}
+# within vs across context trials for D2 D3
+day2data_actrials <- day2data %>% 
+  filter(trialTypeContext == "across")
+day2data_wctrials <- day2data %>%
+  filter(trialTypeContext == "within")
+day3data_actrials <- day3data %>% 
+  filter(trialTypeContext == "across")
+day3data_wctrials <- day3data %>% 
+  filter(trialTypeContext == "within")
+```
+
+This is for all trials (correct and incorrect)
+```{r}
+# get proportion correct for start and end of day 2
+start_d2 <- day2data_actrials %>%
+  filter(run %in% day2start)
+startd2_switch <- sum(start_d2$switchCorrect)/nrow(start_d2)
+startd2_trackDir <- sum(start_d2$trackDirCorrect)/sum(start_d2$switchCorrect)
+
+end_d2 <- day2data_actrials %>%
+  filter(run %in% day2end)
+endd2_switch <- sum(end_d2$switchCorrect)/nrow(end_d2)
+endd2_trackDir <- sum(end_d2$trackDirCorrect)/sum(end_d2$switchCorrect)
+
+# get proportion correct for end of day 3
+end_d3 <- day3data_actrials %>%
+  filter(run %in% day3end)
+endd3_switch <- sum(end_d3$switchCorrect)/nrow(end_d3)
+endd3_trackDir <- sum(end_d3$trackDirCorrect)/sum(end_d3$switchCorrect)
+```
+
+Individual subjects
+```{r}
+# get proportion correct for start and end of day 2
+start_d2_subj <- day2data_actrials %>%
+  dplyr::filter(run %in% day2start)%>%
+  dplyr::group_by(subID)%>%
+  dplyr::summarize(propSwitch=((sum(switchCorrect)/n())*100), propTrackDir=((sum(trackDirCorrect)/sum(switchCorrect))*100))
+  
+end_d2_subj <- day2data_actrials %>%
+  dplyr::filter(run %in% day2end)%>%
+  dplyr::group_by(subID)%>%
+  dplyr::summarize(propSwitch=((sum(switchCorrect)/n())*100), propTrackDir=((sum(trackDirCorrect)/sum(switchCorrect))*100))
+
+# get proportion correct for end of day 3
+end_d3_subj <- day3data_actrials %>%
+  dplyr::filter(run %in% day3end)%>%
+  dplyr::group_by(subID)%>%
+  dplyr::summarize(propSwitch=((sum(switchCorrect)/n())*100), propTrackDir=((sum(trackDirCorrect)/sum(switchCorrect))*100))
+```
+
+```{r}
+#mean(start_d2_subj$propSwitch)
+sd(start_d2_subj$propSwitch)
+
+#mean(start_d2_subj$propTrackDir)
+sd(start_d2_subj$propTrackDir)
+
+#mean(end_d2_subj$propSwitch)
+sd(end_d2_subj$propSwitch)
+
+#mean(end_d2_subj$propTrackDir)
+sd(end_d2_subj$propTrackDir)
+
+#mean(end_d3_subj$propSwitch)
+sd(end_d3_subj$propSwitch)
+
+#mean(end_d3_subj$propTrackDir)
+sd(end_d3_subj$propTrackDir)
+```
+
+
+```{r,fig.width=4,fig.height=2}
+subj_df <- data.frame(matrix(ncol=4, nrow = nrow(start_d2_subj)))
+subj_df$subID <- start_d2_subj$subID
+subj_df$Day2_Start <- start_d2_subj$propSwitch
+subj_df$Day2_End <- end_d2_subj$propSwitch
+subj_df$Day3_End <- end_d3_subj$propSwitch
+subj_df <- subj_df[-c(1:4)]
+
+d <- melt(subj_df, id.vars="subID")
+
+subj_facet <- ggplot(d,aes(x=value,color=variable,fill=variable))+
+  geom_histogram(bins = 12,alpha=0.7)+
+  ggtitle(label = "Switched to Correct Track") +
+  theme_classic()+
+  scale_y_continuous(breaks=seq(0,8,2))+
+  ylim(c(0,8))+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16), 
+        plot.subtitle = element_blank(),
+        axis.text.x = element_text(size=12),
+        axis.text.y = element_text(size=12),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") + 
+  ylab("Count")+
+  xlab("% of Trials")+
+  facet_wrap(~variable)
+subj_facet
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/behav_trackSwitch.png', subj_facet, dpi=600)
+```
+
+```{r,fig.width=4,fig.height=2}
+subj_df2 <- data.frame(matrix(ncol=4, nrow = nrow(start_d2_subj)))
+subj_df2$subID <- start_d2_subj$subID
+subj_df2$Day2_Start <- start_d2_subj$propTrackDir
+subj_df2$Day2_End <- end_d2_subj$propTrackDir
+subj_df2$Day3_End <- end_d3_subj$propTrackDir
+subj_df2 <- subj_df2[-c(1:4)]
+
+g <- melt(subj_df2, id.vars="subID")
+
+subj_facet2 <- ggplot(g,aes(x=value,color=variable,fill=variable))+
+  geom_histogram(bins = 12,alpha=0.7)+
+  ggtitle(label = "Navigated in the Correct Direction After Switching") +
+  theme_classic()+
+  scale_y_continuous(breaks=seq(0,8,2))+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size=16), 
+        plot.subtitle = element_blank(),
+        axis.text.x = element_text(size=12),
+        axis.text.y = element_text(size=12),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size=14),
+        strip.text = element_text(size=13),
+        panel.border = element_rect(color="black",fill=NA),
+        legend.position = "None") + 
+  ylab("Count")+
+  xlab("% of Trials")+
+  facet_wrap(~variable)
+subj_facet2
+ggsave(filename = '~/Dropbox/Project/writing/HPC_Paper/figures/behav_trackDir.png', subj_facet2, dpi=600)
+```
